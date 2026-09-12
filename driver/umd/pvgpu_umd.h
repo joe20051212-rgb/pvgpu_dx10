@@ -1,8 +1,8 @@
 /*
  * PVGPU User-Mode Driver (UMD) - Header
  *
- * This is the D3D11 User-Mode Display Driver that runs in the application's
- * process space. It receives D3D11 API calls from the runtime and translates
+ * This is the D3D10.1 User-Mode Display Driver that runs in the application's
+ * process space. It receives D3D10/11 API calls from the runtime and translates
  * them into pvgpu commands that are submitted to the KMD via command buffers.
  *
  * Copyright (c) SANSI-GROUP. All rights reserved.
