@@ -2,6 +2,7 @@
  * PVGPU Kernel-Mode Driver
  *
  * WDDM 2.0 display miniport driver for paravirtualized GPU.
+ * Restricted to WDDM 1.1 / DirectX 10.1 capabilities.
  * This driver runs in the Windows guest and communicates with
  * the host backend via shared memory and doorbell registers.
  *
@@ -50,6 +51,8 @@ DriverEntry(
     g_DriverObject = DriverObject;
 
     /* Initialize DRIVER_INITIALIZATION_DATA structure */
+    /* We keep the WDDM 2.0 interface version for modern OS compatibility, 
+       but we will restrict capabilities to DX10.1 in QueryAdapterInfo */
     initData.Version = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
 
     /* Required Plug and Play callbacks */
@@ -435,7 +438,7 @@ PvgpuDpcRoutine(
 
 /*
  * =============================================================================
- * Query Adapter Info (Stub)
+ * Query Adapter Info
  * =============================================================================
  */
 
@@ -451,6 +454,12 @@ PvgpuQueryAdapterInfo(
     case DXGKQAITYPE_DRIVERCAPS:
     {
         DXGK_DRIVERCAPS* caps = (DXGK_DRIVERCAPS*)QueryAdapterInfo->pOutputData;
+        
+        /* Ensure we don't overflow the OS buffer */
+        if (QueryAdapterInfo->OutputDataSize < sizeof(DXGK_DRIVERCAPS)) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
         RtlZeroMemory(caps, sizeof(DXGK_DRIVERCAPS));
 
         /* Basic driver capabilities */
@@ -466,15 +475,21 @@ PvgpuQueryAdapterInfo(
         caps->SchedulingCaps.MultiEngineAware = FALSE;
         caps->SchedulingCaps.VSyncPowerSaveAware = TRUE;
 
-        /* Memory management */
+        /* Memory management - restrict to DX10 features */
         caps->MemoryManagementCaps.OutOfOrderLock = TRUE;
         caps->MemoryManagementCaps.PagingNode = 0;
+        caps->MemoryManagementCaps.VirtualAddressingSupported = FALSE;
+        caps->MemoryManagementCaps.GpuMmuSupported = FALSE;
+        caps->MemoryManagementCaps.IoMmuSupported = FALSE;
 
         /* GPU engine count */
         caps->GpuEngineTopology.NbAsymetricProcessingNodes = 1;
 
-        /* Indicate we support WDDM 2.0 */
-        caps->WDDMVersion = DXGKDDI_WDDMv2;
+        /* 
+         * THIS IS THE MAGIC LINE THAT RESTRICTS IT TO DX10.
+         * Reporting WDDM 1.1 tells the OS to only allow Feature Level 10_1.
+         */
+        caps->WDDMVersion = DXGKDDI_WDDMv1_1;
 
         return STATUS_SUCCESS;
     }
@@ -896,7 +911,7 @@ PvgpuPresent(
     /*
      * Build a present command and submit it to the ring buffer.
      * The host backend will pick this up, do the actual present/flip
-     * via its D3D11 swapchain, and signal completion.
+     * via its D3D swapchain, and signal completion.
      */
     RtlZeroMemory(&cmd, sizeof(cmd));
     cmd.header.type = PVGPU_CMD_PRESENT;
@@ -1424,10 +1439,10 @@ PvgpuEscape(
         }
 
         caps->features = context->ControlRegion->features;
-        caps->max_texture_size = 16384;      /* D3D11 max */
-        caps->max_render_targets = 8;        /* D3D11 standard */
+        caps->max_texture_size = 8192;        /* D3D10 max texture size */
+        caps->max_render_targets = 8;         /* D3D10 standard */
         caps->max_vertex_streams = 16;
-        caps->max_constant_buffers = 14;     /* Per stage */
+        caps->max_constant_buffers = 14;      /* Per stage */
         caps->display_width = context->DisplayWidth;
         caps->display_height = context->DisplayHeight;
         caps->display_refresh = context->DisplayRefresh;
