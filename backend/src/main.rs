@@ -4,7 +4,7 @@
 //! 1. Connects to the QEMU pvgpu device via named pipe
 //! 2. Maps the shared memory region
 //! 3. Processes commands from the guest via the command ring
-//! 4. Executes D3D11 commands on the real GPU
+//! 4. Executes D3D11 commands on the real GPU (Restricted to DX10.1)
 //! 5. Presents frames via window or shared texture
 
 // Allow dead code during development - this is a skeleton implementation
@@ -95,12 +95,20 @@ impl BackendService {
                 shmem.validate_control_region()?;
                 self.shared_memory = Some(shmem);
 
+                // Construct DX10.1 feature mask explicitly.
+                // We omit D3D11, COMPUTE, and TESSELLATION to tell the guest
+                // it must only send DX10.1 commands.
+                let features = PVGPU_FEATURE_D3D10 
+                    | PVGPU_FEATURE_GEOMETRY 
+                    | PVGPU_FEATURE_MSAA 
+                    | PVGPU_FEATURE_VSYNC;
+
                 // Send handshake acknowledgement
                 server.send_message(BackendMessage::HandshakeAck {
-                    features: PVGPU_FEATURES_MVP,
+                    features,
                 })?;
 
-                info!("Handshake complete!");
+                info!("Handshake complete! (Negotiated DX10.1)");
                 Ok(())
             }
             _ => Err(anyhow::anyhow!("Expected handshake, got {:?}", msg)),
@@ -109,7 +117,7 @@ impl BackendService {
 
     /// Initialize D3D11 renderer and presentation pipeline
     fn init_renderer(&mut self) -> Result<()> {
-        info!("Initializing D3D11 renderer...");
+        info!("Initializing D3D11 renderer (DX10.1 mode)...");
         let renderer = D3D11Renderer::new(Some(self.config.adapter_index))?;
 
         // Get device and context for presentation pipeline before moving renderer
