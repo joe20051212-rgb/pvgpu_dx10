@@ -371,16 +371,15 @@ static bool pvgpu_backend_handshake(PvgpuState *s)
         return false;
     }
     
-    /* Validate features - ensure backend supports at least D3D11 */
+    /* Validate features - accept backend if it supports at least D3D10 */
     if (payload_size >= sizeof(features) && features != 0) {
-        uint64_t required = PVGPU_FEATURE_D3D11;
-        if ((features & required) != required) {
-            error_report("pvgpu: backend missing required D3D11 feature (features=0x%"PRIx64")", features);
-            return false;
-        }
-        /* Store negotiated features in BAR0 registers */
         s->features = features;
-        info_report("pvgpu: backend features negotiated: 0x%"PRIx64, features);
+        
+        if (!(features & PVGPU_FEATURE_D3D11)) {
+            info_report("pvgpu: backend does not support D3D11, falling back to D3D10 (features=0x%"PRIx64")", features);
+        } else {
+            info_report("pvgpu: backend features negotiated: 0x%"PRIx64, features);
+        }
     } else {
         /* Backend didn't send features - assume MVP set */
         s->features = PVGPU_FEATURES_MVP;
@@ -560,10 +559,10 @@ static uint64_t pvgpu_bar0_read(void *opaque, hwaddr addr, unsigned size)
         val = PVGPU_VERSION;
         break;
     case PVGPU_REG_FEATURES:
-        val = (uint32_t)(PVGPU_FEATURES_MVP & 0xFFFFFFFF);
+        val = (uint32_t)(s->features & 0xFFFFFFFF);
         break;
     case PVGPU_REG_FEATURES_HI:
-        val = (uint32_t)(PVGPU_FEATURES_MVP >> 32);
+        val = (uint32_t)(s->features >> 32);
         break;
     case PVGPU_REG_STATUS:
         val = s->status;
@@ -656,7 +655,7 @@ static void pvgpu_init_shmem(PvgpuState *s)
     
     s->ctrl->magic = PVGPU_MAGIC;
     s->ctrl->version = PVGPU_VERSION;
-    s->ctrl->features = PVGPU_FEATURES_MVP;
+    s->ctrl->features = s->features; /* Report negotiated features */
     
     /* Ring starts after control region */
     s->ctrl->ring_offset = PVGPU_CONTROL_REGION_SIZE;
@@ -712,7 +711,16 @@ static void pvgpu_realize(PCIDevice *pci_dev, Error **errp)
                      PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
                      &s->bar2);
     
-    /* Initialize shared memory with control region */
+    /* Try to connect to backend service */
+    if (pvgpu_backend_connect(s)) {
+        if (pvgpu_backend_handshake(s)) {
+            s->backend_connected = true;
+        } else {
+            pvgpu_backend_disconnect(s);
+        }
+    }
+    
+    /* Initialize shared memory with control region (AFTER handshake so we know features) */
     pvgpu_init_shmem(s);
     
     /* Initialize MSI-X if available */
@@ -725,25 +733,16 @@ static void pvgpu_realize(PCIDevice *pci_dev, Error **errp)
         *errp = NULL;
     }
     
-    /* Mark device as ready (but no backend yet) */
+    /* Mark device as ready */
     s->status = PVGPU_STATUS_READY;
-    
-    /* Try to connect to backend service */
-    if (pvgpu_backend_connect(s)) {
-        if (pvgpu_backend_handshake(s)) {
-            s->backend_connected = true;
-            s->status |= PVGPU_STATUS_BACKEND_CONN;
-            
-            /* Start backend message receiver thread */
-            s->backend_thread_running = true;
-            qemu_thread_create(&s->backend_thread, "pvgpu-backend",
-                               pvgpu_backend_thread, s, QEMU_THREAD_JOINABLE);
-        } else {
-            pvgpu_backend_disconnect(s);
-        }
-    }
-    
-    if (!s->backend_connected) {
+    if (s->backend_connected) {
+        s->status |= PVGPU_STATUS_BACKEND_CONN;
+        
+        /* Start backend message receiver thread */
+        s->backend_thread_running = true;
+        qemu_thread_create(&s->backend_thread, "pvgpu-backend",
+                           pvgpu_backend_thread, s, QEMU_THREAD_JOINABLE);
+    } else {
         /* Backend not available - device will work but no GPU acceleration */
         error_report("pvgpu: backend not connected - GPU acceleration unavailable");
     }
