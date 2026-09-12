@@ -18,26 +18,43 @@ jobs:
       shell: pwsh
       run: |
         nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk
-        
-        # Merge the NuGet package into the standard Windows Kits folder
+
         $winKits = "C:\Program Files (x86)\Windows Kits\10"
-        $packages = Get-ChildItem "C:\wdk\Microsoft.Windows.*"
-        foreach ($pkg in $packages) {
-            Write-Host "Merging $($pkg.Name) into Windows Kits..."
-            Copy-Item -Path "$($pkg.FullName)\*" -Destination $winKits -Recurse -Force
-        }
         
-        # Auto-detect the SDK version that was just installed by NuGet
+        # Locate the installed WDK package root
+        $wdkPkg = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*" | Select-Object -First 1
+        
+        # Copy headers, libs, and targets into Windows Kits
+        if (Test-Path "$($wdkPkg.FullName)\build\native") {
+            Copy-Item -Path "$($wdkPkg.FullName)\build\native\*" -Destination $winKits -Recurse -Force
+        } else {
+            Copy-Item -Path "$($wdkPkg.FullName)\*" -Destination $winKits -Recurse -Force
+        }
+
+        # Auto-detect the installed SDK/WDK version string
         $libDir = Get-ChildItem "$winKits\Lib\10.*" -Directory | Sort-Object Name -Descending | Select-Object -First 1
         $version = $libDir.Name
         Write-Host "Detected WDK Version: $version"
-        echo "version=$version" >> $env:GITHUB_OUTPUT
+        "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v1.1
+      uses: microsoft/setup-msbuild@v2
 
     - name: Build Solution
-      run: msbuild driver/pvgpu.sln /p:Configuration=Release /p:Platform=x64 /p:SpectreMitigation=false /p:WindowsTargetPlatformVersion=${{ steps.wdk.outputs.version }}
+      shell: pwsh
+      run: |
+        $version = "${{ steps.wdk.outputs.version }}"
+        $kmLibPath = "C:\Program Files (x86)\Windows Kits\10\Lib\$version\km\x64"
+        
+        # Pass DisableInfVerif=true to bypass missing InfVerif.dll in CI
+        # Pass AdditionalLibraryDirectories so link.exe finds dxgkrnl.lib
+        msbuild driver/pvgpu.sln `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:SpectreMitigation=false `
+          /p:WindowsTargetPlatformVersion=$version `
+          /p:DisableInfVerif=true `
+          /p:AdditionalLibraryDirectories="$kmLibPath"
 
     - name: Upload Built Drivers
       uses: actions/upload-artifact@v4
