@@ -24,30 +24,82 @@ jobs:
     - name: Install and Integrate WDK Package
       shell: powershell
       run: |
+        # Install WDK NuGet package
         nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk -Version 10.0.26100.2454
         
         $wdkPkg = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*" | Select-Object -First 1
         $winKits = "C:\Program Files (x86)\Windows Kits\10"
-
-        # Copy missing libraries and binary tooling into standard Windows Kits directory
+        
+        Write-Host "WDK Package: $($wdkPkg.FullName)"
+        
+        # Copy WDK files to Windows Kits
         if (Test-Path "$($wdkPkg.FullName)\build\native") {
+            Write-Host "Copying WDK build files to Windows Kits..."
             Copy-Item -Path "$($wdkPkg.FullName)\build\native\*" -Destination $winKits -Recurse -Force
         }
-
-        # Locate extracted x64 km library path for explicit linking parameter
-        $wdkLib = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\build\native\Lib\*\km\x64" | Select-Object -First 1
-        "WDK_LIB_PATH=$($wdkLib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
+        # Find kernel-mode library path (km = kernel mode)
+        $kmLibPaths = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\build\native\Lib\*\km" -Directory -ErrorAction SilentlyContinue
+        
+        if ($kmLibPaths) {
+            # For x64
+            $x64KmLib = Get-ChildItem "$($kmLibPaths[0].FullName)\x64" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($x64KmLib) {
+                Write-Host "Found x64 KM library: $($x64KmLib.FullName)"
+                "DDK_LIB_PATH=$($x64KmLib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+            }
+            
+            # For ARM64
+            $arm64KmLib = Get-ChildItem "$($kmLibPaths[0].FullName)\ARM64" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($arm64KmLib) {
+                Write-Host "Found ARM64 KM library: $($arm64KmLib.FullName)"
+                "DDK_LIB_PATH_ARM64=$($arm64KmLib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+            }
+        }
+        
+        # Verify dxgkrnl.lib exists
+        if (Test-Path "C:\Program Files (x86)\Windows Kits\10\Lib\*\km\x64\dxgkrnl.lib" -ErrorAction SilentlyContinue) {
+            Write-Host "✓ dxgkrnl.lib found"
+        } else {
+            $found = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter "dxgkrnl.lib" -ErrorAction SilentlyContinue
+            if ($found) {
+                Write-Host "✓ dxgkrnl.lib found at: $($found[0].FullName)"
+            } else {
+                Write-Host "⚠ Warning: dxgkrnl.lib not found in Windows Kits"
+            }
+        }
+        
+        # Verify InfVerif.dll exists
+        $infVerif = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter "InfVerif.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($infVerif) {
+            Write-Host "✓ InfVerif.dll found at: $($infVerif.FullName)"
+        } else {
+            Write-Host "ℹ InfVerif.dll not found (this is OK - it's disabled in the build)"
+        }
 
     - name: Build Driver Solution
       shell: powershell
       run: |
+        # Ensure DDK_LIB_PATH is set
+        if (-not $env:DDK_LIB_PATH) {
+            Write-Host "⚠ DDK_LIB_PATH not set, attempting to find it..."
+            $fallbackPath = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\build\native\Lib\*\km\x64" -Directory | Select-Object -First 1
+            if ($fallbackPath) {
+                $env:DDK_LIB_PATH = $fallbackPath.FullName
+                Write-Host "Using fallback path: $env:DDK_LIB_PATH"
+            }
+        }
+        
+        Write-Host "Building with DDK_LIB_PATH: $env:DDK_LIB_PATH"
+        
         msbuild driver/pvgpu.sln `
           /p:Configuration=Release `
           /p:Platform=x64 `
           /p:SpectreMitigation=false `
           /p:WindowsTargetPlatformVersion=10.0.26100.0 `
+          /p:DDK_LIB_PATH="$env:DDK_LIB_PATH" `
           /p:EnableInf2Cat=false `
           /p:Inf2CatUseLocalTime=true `
           /p:DriverPackaging=false `
           /p:InfVerif=false `
-          /p:LinkAdditionalLibraryDirectories="$env:WDK_LIB_PATH"
+          /v:detailed
