@@ -13,14 +13,11 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install WDK
-      shell: pwsh
+    - name: Install WDK via NuGet
+      shell: cmd
       run: |
-        Write-Host "Downloading WDK installer..."
-        curl.exe -L -o wdksetup.exe "https://go.microsoft.com/fwlink/?linkid=2196231"
-        Write-Host "Installing WDK silently..."
-        $p = Start-Process -FilePath ".\wdksetup.exe" -ArgumentList "/quiet", "/norestart" -Wait -PassThru
-        Write-Host "WDK installer exit code: $($p.ExitCode)"
+        nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk
+        xcopy "C:\wdk\Microsoft.Windows.WDK.x64.*\build\*" "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v170\" /E /I /Y
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
