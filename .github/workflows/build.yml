@@ -20,18 +20,14 @@ jobs:
         nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk
 
         $winKits = "C:\Program Files (x86)\Windows Kits\10"
-        
-        # Locate the installed WDK package root
         $wdkPkg = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*" | Select-Object -First 1
         
-        # Copy headers, libs, and targets into Windows Kits
         if (Test-Path "$($wdkPkg.FullName)\build\native") {
             Copy-Item -Path "$($wdkPkg.FullName)\build\native\*" -Destination $winKits -Recurse -Force
         } else {
             Copy-Item -Path "$($wdkPkg.FullName)\*" -Destination $winKits -Recurse -Force
         }
 
-        # Auto-detect the installed SDK/WDK version string
         $libDir = Get-ChildItem "$winKits\Lib\10.*" -Directory | Sort-Object Name -Descending | Select-Object -First 1
         $version = $libDir.Name
         Write-Host "Detected WDK Version: $version"
@@ -42,19 +38,19 @@ jobs:
 
     - name: Build Solution
       shell: pwsh
+      env:
+        LIB: C:\Program Files (x86)\Windows Kits\10\lib\10.0.26100.0\km\x64;%LIB%
       run: |
         $version = "${{ steps.wdk.outputs.version }}"
-        $kmLibPath = "C:\Program Files (x86)\Windows Kits\10\Lib\$version\km\x64"
-        
-        # Pass DisableInfVerif=true to bypass missing InfVerif.dll in CI
-        # Pass AdditionalLibraryDirectories so link.exe finds dxgkrnl.lib
         msbuild driver/pvgpu.sln `
           /p:Configuration=Release `
           /p:Platform=x64 `
           /p:SpectreMitigation=false `
           /p:WindowsTargetPlatformVersion=$version `
-          /p:DisableInfVerif=true `
-          /p:AdditionalLibraryDirectories="$kmLibPath"
+          /p:EnableInf2Cat=false `
+          /p:Inf2CatUseLocalTime=true `
+          /p:DriverPackaging="false" `
+          /p:InfVerif="false"
 
     - name: Upload Built Drivers
       uses: actions/upload-artifact@v4
