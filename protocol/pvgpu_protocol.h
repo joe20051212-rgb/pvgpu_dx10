@@ -131,8 +131,7 @@ typedef struct PvgpuControlRegion {
     /* 0x140 */ uint8_t reserved[0xEC0];        /* Pad to 4KB total */
 } PvgpuControlRegion;
 
-_Static_assert(sizeof(PvgpuControlRegion) == PVGPU_CONTROL_REGION_SIZE, 
-               "Control region must be exactly 4KB");
+C_ASSERT(sizeof(PvgpuControlRegion) == PVGPU_CONTROL_REGION_SIZE);
 
 /*
  * =============================================================================

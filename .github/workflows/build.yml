@@ -14,8 +14,15 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Install WDK
-      shell: cmd
-      run: choco install wdk10 -y
+      shell: pwsh
+      run: |
+        Write-Host "Downloading WDK ISO..."
+        Invoke-WebRequest -Uri "https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/22621.1.220506-1250.22h1_release_svc_prod1_WDK.iso" -OutFile "wdk.iso"
+        $mountResult = Mount-DiskImage -ImagePath "wdk.iso" -PassThru
+        $driveLetter = ($mountResult | Get-Volume).DriveLetter
+        Write-Host "Installing WDK MSI..."
+        $msiPath = "$($driveLetter):\Windows Driver Kit\Installers\Windows Kit.Windows Driver Kit-x86_en-us.msi"
+        Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /quiet /norestart" -Wait
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
