@@ -16,12 +16,21 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
 
-    - name: Install Windows SDK
+    - name: Install Windows SDK and WDK
       run: |
         choco install windows-sdk-10.1 -y
         choco install wixtoolset -y
         choco install wdk -y
         choco install wdk-testing -y
+
+    - name: Set Up WDK Environment
+      run: |
+        $wdkPath = "C:\Program Files (x86)\Windows Kits\10"
+        $env:INCLUDE = "$wdkPath\Include\10.0.26100.0;$env:INCLUDE"
+        $env:LIB = "$wdkPath\Lib\10.0.26100.0\um\x64;$wdkPath\Lib\10.0.26100.0\km\x64;$env:LIB"
+        echo "INCLUDE=$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "LIB=$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
     - name: Build Solution
       run: msbuild driver/pvgpu.sln /p:Configuration=Release /p:Platform=x64
 
