@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use tracing::{debug, info, warn};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
+    D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1,
     D3D_PRIMITIVE_TOPOLOGY,
 };
 use windows::Win32::Graphics::Direct3D11::{
@@ -164,7 +164,7 @@ impl D3D11Renderer {
 
     /// Create a new D3D11 renderer with the specified adapter
     pub fn new(adapter_index: Option<u32>) -> Result<Self> {
-        info!("Creating D3D11 device...");
+        info!("Creating D3D11 device (Restricted to DX10.1)...");
 
         // Create DXGI factory
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
@@ -199,8 +199,8 @@ impl D3D11Renderer {
             adapter_info.dedicated_video_memory / (1024 * 1024)
         );
 
-        // Feature levels to try
-        let feature_levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
+        // Feature levels to try - strictly restricted to DX10 for pvGPU
+        let feature_levels = [D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0];
 
         // Create flags
         let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
@@ -213,7 +213,7 @@ impl D3D11Renderer {
         // Create device
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
-        let mut achieved_level = D3D_FEATURE_LEVEL_11_0;
+        let mut achieved_level = D3D_FEATURE_LEVEL_10_1;
 
         unsafe {
             D3D11CreateDevice(
@@ -390,10 +390,10 @@ impl D3D11Renderer {
             return Err(anyhow!("Invalid texture dimensions"));
         }
 
-        // D3D11 max texture size is 16384x16384
-        if width > 16384 || height > 16384 {
+        // D3D10 max texture size is 8192x8192
+        if width > 8192 || height > 8192 {
             warn!(
-                "CreateTexture2D: dimensions {}x{} exceed max (16384) for id={}",
+                "CreateTexture2D: dimensions {}x{} exceed max (8192) for id={}",
                 width, height, id
             );
             return Err(anyhow!("Texture dimensions exceed maximum"));
