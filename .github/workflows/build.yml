@@ -31,14 +31,36 @@ jobs:
         
         Write-Host "WDK Package: $($wdkPkg.FullName)"
         
+        # Copy build files
         if (Test-Path "$($wdkPkg.FullName)\build\native") {
             Write-Host "Copying WDK build files..."
             Copy-Item -Path "$($wdkPkg.FullName)\build\native\*" -Destination $winKits -Recurse -Force
         }
         
-        $kmLibPath = (Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\build\native\Lib\*\km\x64" -Directory | Select-Object -First 1).FullName
+        # Copy lib files (critical for dxgkrnl.lib)
+        if (Test-Path "$($wdkPkg.FullName)\lib") {
+            Write-Host "Copying WDK lib files..."
+            Copy-Item -Path "$($wdkPkg.FullName)\lib\*" -Destination "$winKits\Lib" -Recurse -Force
+        }
+        
+        # Find and set the KM lib path
+        $kmLibPath = (Get-ChildItem "$winKits\Lib\10.0.26100.0\km\x64" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+        if (-not $kmLibPath) {
+            $kmLibPath = (Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\lib\*\km\x64" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+        }
+        
         Write-Host "KM Lib Path: $kmLibPath"
         "DDK_LIB_PATH=$kmLibPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
+        # Verify dxgkrnl.lib exists
+        $dxgkrnlPath = "$winKits\Lib\10.0.26100.0\km\x64\dxgkrnl.lib"
+        if (Test-Path $dxgkrnlPath) {
+            Write-Host "✓ Found dxgkrnl.lib at: $dxgkrnlPath"
+        } else {
+            Write-Host "✗ WARNING: dxgkrnl.lib not found at expected location"
+            Write-Host "Searching for dxgkrnl.lib in WDK package..."
+            Get-ChildItem "C:\wdk" -Recurse -Filter "dxgkrnl.lib" | ForEach-Object { Write-Host "Found: $($_.FullName)" }
+        }
 
     - name: Build Driver Solution
       shell: powershell
