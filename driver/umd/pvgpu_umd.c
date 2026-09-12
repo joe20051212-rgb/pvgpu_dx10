@@ -1,7 +1,7 @@
 /*
  * PVGPU User-Mode Driver (UMD) - Implementation
  *
- * D3D11 User-Mode Display Driver that translates D3D11 API calls into
+ * D3D10.1 User-Mode Display Driver that translates D3D10/11 API calls into
  * pvgpu commands submitted to the kernel-mode driver.
  *
  * Copyright (c) SANSI-GROUP. All rights reserved.
@@ -25,6 +25,13 @@
 #else
 #define PVGPU_TRACE(fmt, ...)
 #endif
+
+/* ============================================================================
+ * Global DDI Version Tracking
+ * ============================================================================ */
+/* Tracks the negotiated DDI version so we don't write out-of-bounds
+ * into a D3D10_1DDI_DEVICEFUNCS struct when filling the device function table. */
+static UINT32 g_DdiInterfaceVersion = D3D10_1_DDI_INTERFACE_VERSION;
 
 /* ============================================================================
  * DLL Entry Point
@@ -59,9 +66,6 @@ BOOL WINAPI DllMain(
 
 /*
  * OpenAdapter10_2 - Called by D3D runtime to initialize the adapter
- *
- * This is the main entry point exported by the UMD DLL. The runtime calls
- * this to get function pointers for adapter-level operations.
  */
 HRESULT APIENTRY OpenAdapter10_2(
     _Inout_ D3D10DDIARG_OPENADAPTER* pOpenData)
@@ -76,11 +80,14 @@ HRESULT APIENTRY OpenAdapter10_2(
     }
     
     /* Validate interface version */
-    if (pOpenData->Interface < D3D10_1_DDI_INTERFACE_VERSION)
+    if (pOpenData->Interface < D3D10_0_DDI_INTERFACE_VERSION)
     {
         PVGPU_TRACE("Unsupported interface version: 0x%x", pOpenData->Interface);
         return E_NOINTERFACE;
     }
+    
+    /* Save the negotiated interface version globally */
+    g_DdiInterfaceVersion = pOpenData->Interface;
     
     /* Allocate adapter structure */
     pAdapter = (PVGPU_UMD_ADAPTER*)HeapAlloc(
@@ -97,15 +104,15 @@ HRESULT APIENTRY OpenAdapter10_2(
     pAdapter->hRTAdapter = pOpenData->hRTAdapter;
     pAdapter->pAdapterCallbacks = pOpenData->pAdapterCallbacks;
     
-    /* Initialize adapter capabilities */
-    pAdapter->MaxTextureWidth = 16384;
-    pAdapter->MaxTextureHeight = 16384;
+    /* Initialize adapter capabilities (DX10.1 Limits) */
+    pAdapter->MaxTextureWidth = 8192;
+    pAdapter->MaxTextureHeight = 8192;
     pAdapter->MaxTexture3DDepth = 2048;
-    pAdapter->MaxTextureCubeSize = 16384;
+    pAdapter->MaxTextureCubeSize = 8192;
     pAdapter->MaxPrimitiveCount = 0xFFFFFFFF;
-pAdapter->SupportsCompute = TRUE;
-    pAdapter->SupportsTessellation = TRUE;
-    pAdapter->SupportsStreamOutput = FALSE; /* TODO: Enable when implemented */
+    pAdapter->SupportsCompute = FALSE;          /* DX11 only */
+    pAdapter->SupportsTessellation = FALSE;     /* DX11 only */
+    pAdapter->SupportsStreamOutput = FALSE;     /* TODO: Enable when implemented */
     
     /* Fill in adapter function table */
     pOpenData->pAdapterFuncs->pfnCalcPrivateDeviceSize = PvgpuCalcPrivateDeviceSize;
@@ -207,8 +214,6 @@ HRESULT APIENTRY PvgpuCreateDevice(
     if (FAILED(hr))
     {
         PVGPU_TRACE("PvgpuCreateDevice: Failed to init shared memory, hr=0x%08X", hr);
-        /* Continue anyway - will work without direct shmem access */
-        /* Commands will be staged but doorbell won't work */
     }
     
     /* Fill in device function table */
@@ -229,8 +234,6 @@ HRESULT APIENTRY PvgpuCreateDevice(
     pDeviceFuncs->pfnCreateVertexShader = PvgpuCreateVertexShader;
     pDeviceFuncs->pfnCreatePixelShader = PvgpuCreatePixelShader;
     pDeviceFuncs->pfnCreateGeometryShader = PvgpuCreateGeometryShader;
-    pDeviceFuncs->pfnCreateHullShader = PvgpuCreateHullShader;
-    pDeviceFuncs->pfnCreateDomainShader = PvgpuCreateDomainShader;
     pDeviceFuncs->pfnDestroyShader = PvgpuDestroyShader;
     
     /* Input assembler */
@@ -239,12 +242,10 @@ HRESULT APIENTRY PvgpuCreateDevice(
     pDeviceFuncs->pfnIaSetIndexBuffer = PvgpuIaSetIndexBuffer;
     pDeviceFuncs->pfnIaSetTopology = PvgpuIaSetTopology;
     
-    /* Shader stages */
+    /* Shader stages (DX10) */
     pDeviceFuncs->pfnVsSetShader = PvgpuVsSetShader;
     pDeviceFuncs->pfnPsSetShader = PvgpuPsSetShader;
     pDeviceFuncs->pfnGsSetShader = PvgpuGsSetShader;
-    pDeviceFuncs->pfnHsSetShader = PvgpuHsSetShader;
-    pDeviceFuncs->pfnDsSetShader = PvgpuDsSetShader;
     
     /* Output merger */
     pDeviceFuncs->pfnSetRenderTargets = PvgpuSetRenderTargets;
@@ -306,32 +307,43 @@ HRESULT APIENTRY PvgpuCreateDevice(
     pDeviceFuncs->pfnVsSetConstantBuffers = PvgpuVsSetConstantBuffers;
     pDeviceFuncs->pfnPsSetConstantBuffers = PvgpuPsSetConstantBuffers;
     pDeviceFuncs->pfnGsSetConstantBuffers = PvgpuGsSetConstantBuffers;
-    pDeviceFuncs->pfnHsSetConstantBuffers = PvgpuHsSetConstantBuffers;
-    pDeviceFuncs->pfnDsSetConstantBuffers = PvgpuDsSetConstantBuffers;
     pDeviceFuncs->pfnVsSetShaderResources = PvgpuVsSetShaderResources;
     pDeviceFuncs->pfnPsSetShaderResources = PvgpuPsSetShaderResources;
     pDeviceFuncs->pfnGsSetShaderResources = PvgpuGsSetShaderResources;
-    pDeviceFuncs->pfnHsSetShaderResources = PvgpuHsSetShaderResources;
-    pDeviceFuncs->pfnDsSetShaderResources = PvgpuDsSetShaderResources;
     pDeviceFuncs->pfnVsSetSamplers = PvgpuVsSetSamplers;
     pDeviceFuncs->pfnPsSetSamplers = PvgpuPsSetSamplers;
     pDeviceFuncs->pfnGsSetSamplers = PvgpuGsSetSamplers;
-    pDeviceFuncs->pfnHsSetSamplers = PvgpuHsSetSamplers;
-    pDeviceFuncs->pfnDsSetSamplers = PvgpuDsSetSamplers;
     
-    /* Compute shader stage */
-    pDeviceFuncs->pfnCsSetShader = PvgpuCsSetShader;
-    pDeviceFuncs->pfnCsSetConstantBuffers = PvgpuCsSetConstantBuffers;
-    pDeviceFuncs->pfnCsSetShaderResources = PvgpuCsSetShaderResources;
-    pDeviceFuncs->pfnCsSetSamplers = PvgpuCsSetSamplers;
-    pDeviceFuncs->pfnCsSetUnorderedAccessViews = PvgpuCsSetUnorderedAccessViews;
-    pDeviceFuncs->pfnDispatch = PvgpuDispatch;
-    pDeviceFuncs->pfnDispatchIndirect = PvgpuDispatchIndirect;
-    
-    /* UAV creation */
-    pDeviceFuncs->pfnCalcPrivateUnorderedAccessViewSize = PvgpuCalcPrivateUnorderedAccessViewSize;
-    pDeviceFuncs->pfnCreateUnorderedAccessView = PvgpuCreateUnorderedAccessView;
-    pDeviceFuncs->pfnDestroyUnorderedAccessView = PvgpuDestroyUnorderedAccessView;
+    /* D3D11-only functions (Hull, Domain, Compute, UAVs)
+     * We must NOT write to these pointers if the OS provided a D3D10_1DDI_DEVICEFUNCS 
+     * struct, otherwise we will corrupt memory. The OS size is strictly based on 
+     * the negotiated interface version. */
+    if (g_DdiInterfaceVersion >= D3D11_0_DDI_INTERFACE_VERSION)
+    {
+        pDeviceFuncs->pfnCreateHullShader = PvgpuCreateHullShader;
+        pDeviceFuncs->pfnCreateDomainShader = PvgpuCreateDomainShader;
+        
+        pDeviceFuncs->pfnHsSetShader = PvgpuHsSetShader;
+        pDeviceFuncs->pfnDsSetShader = PvgpuDsSetShader;
+        pDeviceFuncs->pfnHsSetConstantBuffers = PvgpuHsSetConstantBuffers;
+        pDeviceFuncs->pfnDsSetConstantBuffers = PvgpuDsSetConstantBuffers;
+        pDeviceFuncs->pfnHsSetShaderResources = PvgpuHsSetShaderResources;
+        pDeviceFuncs->pfnDsSetShaderResources = PvgpuDsSetShaderResources;
+        pDeviceFuncs->pfnHsSetSamplers = PvgpuHsSetSamplers;
+        pDeviceFuncs->pfnDsSetSamplers = PvgpuDsSetSamplers;
+        
+        pDeviceFuncs->pfnCsSetShader = PvgpuCsSetShader;
+        pDeviceFuncs->pfnCsSetConstantBuffers = PvgpuCsSetConstantBuffers;
+        pDeviceFuncs->pfnCsSetShaderResources = PvgpuCsSetShaderResources;
+        pDeviceFuncs->pfnCsSetSamplers = PvgpuCsSetSamplers;
+        pDeviceFuncs->pfnCsSetUnorderedAccessViews = PvgpuCsSetUnorderedAccessViews;
+        pDeviceFuncs->pfnDispatch = PvgpuDispatch;
+        pDeviceFuncs->pfnDispatchIndirect = PvgpuDispatchIndirect;
+        
+        pDeviceFuncs->pfnCalcPrivateUnorderedAccessViewSize = PvgpuCalcPrivateUnorderedAccessViewSize;
+        pDeviceFuncs->pfnCreateUnorderedAccessView = PvgpuCreateUnorderedAccessView;
+        pDeviceFuncs->pfnDestroyUnorderedAccessView = PvgpuDestroyUnorderedAccessView;
+    }
     
     PVGPU_TRACE("PvgpuCreateDevice succeeded");
     return S_OK;
@@ -354,19 +366,7 @@ HRESULT APIENTRY PvgpuCloseAdapter(
     return S_OK;
 }
 
-/*
- * Format support table for D3D11 feature-level 11.0.
- * Since all rendering is forwarded to the host GPU via D3D11, we report
- * comprehensive format support. The host backend validates actual hardware
- * support at resource creation time.
- *
- * Support flags:
- *   0x01 = D3D10_DDI_FORMAT_SUPPORT_SHADER_SAMPLE
- *   0x02 = D3D10_DDI_FORMAT_SUPPORT_RENDERTARGET
- *   0x04 = D3D10_DDI_FORMAT_SUPPORT_BLENDABLE
- *   0x08 = D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET
- *   0x10 = D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_LOAD
- */
+/* Format support flags */
 #define PVGPU_FMT_SAMPLE      0x01
 #define PVGPU_FMT_RT          0x02
 #define PVGPU_FMT_BLEND       0x04
@@ -375,7 +375,7 @@ HRESULT APIENTRY PvgpuCloseAdapter(
 
 #define PVGPU_FMT_ALL   (PVGPU_FMT_SAMPLE | PVGPU_FMT_RT | PVGPU_FMT_BLEND | PVGPU_FMT_MSRT | PVGPU_FMT_MSLOAD)
 #define PVGPU_FMT_RT_FULL (PVGPU_FMT_SAMPLE | PVGPU_FMT_RT | PVGPU_FMT_BLEND)
-#define PVGPU_FMT_DS     (PVGPU_FMT_SAMPLE) /* Depth-stencil: sample only */
+#define PVGPU_FMT_DS     (PVGPU_FMT_SAMPLE)
 
 typedef struct _PVGPU_FORMAT_ENTRY {
     DXGI_FORMAT Format;
@@ -432,14 +432,14 @@ static const PVGPU_FORMAT_ENTRY g_PvgpuFormatTable[] = {
     { DXGI_FORMAT_D24_UNORM_S8_UINT,        PVGPU_FMT_DS },
     { DXGI_FORMAT_D16_UNORM,                PVGPU_FMT_DS },
     { DXGI_FORMAT_D32_FLOAT_S8X24_UINT,     PVGPU_FMT_DS },
-    /* Typeless depth formats (for SRV binding of depth textures) */
+    /* Typeless depth formats */
     { DXGI_FORMAT_R32_TYPELESS,             PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_R24G8_TYPELESS,           PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_R16_TYPELESS,             PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_R32G8X24_TYPELESS,        PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_R24_UNORM_X8_TYPELESS,    PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS, PVGPU_FMT_SAMPLE },
-    /* Compressed formats (BC) */
+    /* Compressed formats (DX10: BC1-BC5 only) */
     { DXGI_FORMAT_BC1_UNORM,                PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_BC1_UNORM_SRGB,           PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_BC2_UNORM,                PVGPU_FMT_SAMPLE },
@@ -450,11 +450,7 @@ static const PVGPU_FORMAT_ENTRY g_PvgpuFormatTable[] = {
     { DXGI_FORMAT_BC4_SNORM,                PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_BC5_UNORM,                PVGPU_FMT_SAMPLE },
     { DXGI_FORMAT_BC5_SNORM,                PVGPU_FMT_SAMPLE },
-    { DXGI_FORMAT_BC6H_UF16,               PVGPU_FMT_SAMPLE },
-    { DXGI_FORMAT_BC6H_SF16,               PVGPU_FMT_SAMPLE },
-    { DXGI_FORMAT_BC7_UNORM,                PVGPU_FMT_SAMPLE },
-    { DXGI_FORMAT_BC7_UNORM_SRGB,           PVGPU_FMT_SAMPLE },
-    /* BGRA formats (common for swap chains and UI) */
+    /* BGRA formats */
     { DXGI_FORMAT_B8G8R8A8_UNORM,           PVGPU_FMT_ALL },
     { DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,      PVGPU_FMT_ALL },
     { DXGI_FORMAT_B8G8R8X8_UNORM,           PVGPU_FMT_ALL },
@@ -501,7 +497,6 @@ HRESULT APIENTRY PvgpuGetCaps(
     switch (pData->Type)
     {
     case D3D10_2DDICAPS_TYPE_GETFORMATCOUNT:
-        /* Return number of formats we support */
         if (pData->pData && pData->DataSize >= sizeof(UINT))
         {
             *(UINT*)pData->pData = PVGPU_FORMAT_TABLE_SIZE;
@@ -509,12 +504,6 @@ HRESULT APIENTRY PvgpuGetCaps(
         break;
         
     case D3D10_2DDICAPS_TYPE_GETFORMATDATA:
-        /*
-         * Fill in format support data. Since we forward all rendering to the host
-         * GPU via D3D11, we report comprehensive format support matching a typical
-         * D3D11 feature-level 11.0 device. The host backend will validate actual
-         * hardware support at resource creation time.
-         */
         if (pData->pData != NULL)
         {
             PvgpuFillFormatSupportData(
@@ -524,7 +513,6 @@ HRESULT APIENTRY PvgpuGetCaps(
         break;
         
     case D3D10_2DDICAPS_TYPE_GETMULTISAMPLEQUALITYLEVELS:
-        /* We support 1x MSAA only for now */
         if (pData->pData && pData->DataSize >= sizeof(UINT))
         {
             *(UINT*)pData->pData = 1;
@@ -532,7 +520,6 @@ HRESULT APIENTRY PvgpuGetCaps(
         break;
         
     case D3D11DDICAPS_THREADING:
-        /* No driver-level threading support */
         if (pData->pData && pData->DataSize >= sizeof(D3D11DDI_THREADING_CAPS))
         {
             D3D11DDI_THREADING_CAPS* pCaps = (D3D11DDI_THREADING_CAPS*)pData->pData;
@@ -541,11 +528,11 @@ HRESULT APIENTRY PvgpuGetCaps(
         break;
         
     case D3D11DDICAPS_3DPIPELINESUPPORT:
-        /* Report D3D11 pipeline support */
+        /* Report D3D10.1 pipeline support */
         if (pData->pData && pData->DataSize >= sizeof(D3D11DDI_3DPIPELINESUPPORT_CAPS))
         {
             D3D11DDI_3DPIPELINESUPPORT_CAPS* pCaps = (D3D11DDI_3DPIPELINESUPPORT_CAPS*)pData->pData;
-            pCaps->Caps = D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_11_0);
+            pCaps->Caps = D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_10_1);
         }
         break;
         
@@ -562,22 +549,20 @@ HRESULT APIENTRY PvgpuGetSupportedVersions(
     _Inout_ UINT32* puEntries,
     _Out_writes_opt_(*puEntries) UINT64* pSupportedDDIInterfaceVersions)
 {
+    /* Strictly report D3D10.x versions. Prevents D3D11 runtime takeover. */
     static const UINT64 SupportedVersions[] = {
-        D3D11_1_DDI_INTERFACE_VERSION,
-        D3D11_0_DDI_INTERFACE_VERSION,
         D3D10_1_DDI_INTERFACE_VERSION,
+        D3D10_0_DDI_INTERFACE_VERSION,
     };
     
     UNREFERENCED_PARAMETER(hAdapter);
     
     if (pSupportedDDIInterfaceVersions == NULL)
     {
-        /* Return count only */
         *puEntries = ARRAYSIZE(SupportedVersions);
         return S_OK;
     }
     
-    /* Copy versions */
     for (UINT32 i = 0; i < *puEntries && i < ARRAYSIZE(SupportedVersions); i++)
     {
         pSupportedDDIInterfaceVersions[i] = SupportedVersions[i];
@@ -602,16 +587,13 @@ void APIENTRY PvgpuDestroyDevice(
     
     if (pDevice != NULL)
     {
-        /* Flush any pending commands */
         PvgpuFlushCommandBuffer(pDevice);
         
-        /* Free staging buffer */
         if (pDevice->pStagingBuffer != NULL)
         {
             HeapFree(GetProcessHeap(), 0, pDevice->pStagingBuffer);
         }
         
-        /* Free resource tracking */
         if (pDevice->pResources != NULL)
         {
             HeapFree(GetProcessHeap(), 0, pDevice->pResources);
@@ -667,40 +649,30 @@ void APIENTRY PvgpuCreateResource(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)hResource.pDrvPrivate;
     
-    if (pResource == NULL)
-    {
-        return;
-    }
+    if (pResource == NULL) return;
     
-    /* Initialize resource tracking structure */
     ZeroMemory(pResource, sizeof(PVGPU_UMD_RESOURCE));
     
-    /* Determine resource type */
     switch (pCreateResource->ResourceDimension)
     {
     case D3D10DDIRESOURCE_BUFFER:
         pResource->Type = PVGPU_RESOURCE_TYPE_BUFFER;
         pResource->ByteWidth = pCreateResource->pMipInfoList[0].TexelWidth;
         break;
-        
     case D3D10DDIRESOURCE_TEXTURE1D:
         pResource->Type = PVGPU_RESOURCE_TYPE_TEXTURE1D;
         break;
-        
     case D3D10DDIRESOURCE_TEXTURE2D:
         pResource->Type = PVGPU_RESOURCE_TYPE_TEXTURE2D;
         break;
-        
     case D3D10DDIRESOURCE_TEXTURE3D:
         pResource->Type = PVGPU_RESOURCE_TYPE_TEXTURE3D;
         break;
-        
     default:
         pResource->Type = PVGPU_RESOURCE_TYPE_UNKNOWN;
         break;
     }
     
-    /* Store resource properties */
     if (pCreateResource->pMipInfoList != NULL)
     {
         pResource->Width = pCreateResource->pMipInfoList[0].TexelWidth;
@@ -713,10 +685,8 @@ void APIENTRY PvgpuCreateResource(
     pResource->BindFlags = pCreateResource->BindFlags;
     pResource->MiscFlags = pCreateResource->MiscFlags;
     
-    /* Allocate a host handle */
     pResource->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     
-    /* Build create resource command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
@@ -729,7 +699,6 @@ void APIENTRY PvgpuCreateResource(
     cmd.format = pResource->Format;
     cmd.bind_flags = pResource->BindFlags;
     
-    /* Determine resource type for protocol */
     switch (pResource->Type)
     {
     case PVGPU_RESOURCE_TYPE_BUFFER:
@@ -749,11 +718,7 @@ void APIENTRY PvgpuCreateResource(
         break;
     }
     
-    /* Submit command to host */
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_RESOURCE, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created resource %u: %ux%u format=%u",
-        pResource->HostHandle, pResource->Width, pResource->Height, pResource->Format);
 }
 
 void APIENTRY PvgpuDestroyResource(
@@ -767,21 +732,14 @@ void APIENTRY PvgpuDestroyResource(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)hResource.pDrvPrivate;
     
-    if (pResource == NULL || pResource->HostHandle == 0)
-    {
-        return;
-    }
+    if (pResource == NULL || pResource->HostHandle == 0) return;
     
-    /* Build destroy command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_DESTROY_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
     cmd.header.resource_id = pResource->HostHandle;
     
-    /* Submit command */
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DESTROY_RESOURCE, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Destroyed resource %u", pResource->HostHandle);
 }
 
 void APIENTRY PvgpuOpenResource(
@@ -798,34 +756,24 @@ void APIENTRY PvgpuOpenResource(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)hResource.pDrvPrivate;
 
-    if (pResource == NULL)
-    {
-        PVGPU_TRACE("OpenResource: NULL resource handle");
-        return;
-    }
+    if (pResource == NULL) return;
 
-    /* Allocate a host-side resource handle */
     hostHandle = PvgpuAllocateResourceHandle(pDevice);
-
-    /* Initialize local resource tracking */
     RtlZeroMemory(pResource, sizeof(PVGPU_UMD_RESOURCE));
     pResource->HostHandle = hostHandle;
     pResource->hRTResource = hRTResource;
     pResource->IsShared = TRUE;
 
-    /* Fill in resource info from the open descriptor */
     if (pOpenResource->NumAllocations > 0)
     {
-        pResource->Type = PVGPU_RESOURCE_TEXTURE_2D;  /* Shared resources are typically textures */
+        pResource->Type = PVGPU_RESOURCE_TEXTURE_2D;
     }
 
-    /* Build open resource command */
     RtlZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_OPEN_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
     cmd.header.resource_id = hostHandle;
 
-    /* The shared handle comes from the KMD allocation's private data */
     if (pOpenResource->pOpenAllocationInfo != NULL &&
         pOpenResource->NumAllocations > 0 &&
         pOpenResource->pOpenAllocationInfo[0].PrivateDriverDataSize >= sizeof(UINT32))
@@ -836,11 +784,7 @@ void APIENTRY PvgpuOpenResource(
     cmd.resource_type = pResource->Type;
     cmd.bind_flags = 0;
 
-    /* Submit command */
     PvgpuWriteCommand(pDevice, PVGPU_CMD_OPEN_RESOURCE, &cmd, sizeof(cmd));
-
-    PVGPU_TRACE("OpenResource: host handle %u, shared handle %u",
-        hostHandle, cmd.shared_handle);
 }
 
 /* ============================================================================
@@ -855,7 +799,6 @@ SIZE_T APIENTRY PvgpuCalcPrivateShaderSize(
     UNREFERENCED_PARAMETER(hDevice);
     UNREFERENCED_PARAMETER(pCode);
     UNREFERENCED_PARAMETER(pSignatures);
-    
     return sizeof(PVGPU_UMD_SHADER);
 }
 
@@ -873,28 +816,22 @@ static void PvgpuCreateShaderInternal(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pShader = (PVGPU_UMD_SHADER*)hShader.pDrvPrivate;
     
-    if (pShader == NULL || pCode == NULL)
-    {
-        return;
-    }
+    if (pShader == NULL || pCode == NULL) return;
     
-    /* Get bytecode size from DXBC header */
-    bytecodeSize = pCode[6]; /* DXBC size is at offset 24 (index 6) */
+    bytecodeSize = pCode[6];
     
-    /* Initialize shader structure */
     ZeroMemory(pShader, sizeof(PVGPU_UMD_SHADER));
     pShader->Type = shaderType;
     pShader->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pShader->BytecodeSize = bytecodeSize;
     
-    /* Build create shader command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_SHADER;
     cmd.header.command_size = sizeof(cmd);
     cmd.shader_id = pShader->HostHandle;
     cmd.shader_type = shaderType;
     cmd.bytecode_size = (UINT32)bytecodeSize;
-    /* Allocate heap space and copy shader bytecode to shared memory */
+    
     if (pDevice->SharedMemoryValid && pDevice->pHeap != NULL && bytecodeSize > 0)
     {
         UINT32 heapOffset = 0;
@@ -904,17 +841,9 @@ static void PvgpuCreateShaderInternal(
             CopyMemory(pDevice->pHeap + heapOffset, pCode, bytecodeSize);
             cmd.bytecode_offset = heapOffset;
         }
-        else
-        {
-            PVGPU_TRACE("Failed to allocate heap for shader bytecode, hr=0x%X", hr);
-        }
     }
     
-    /* Submit command */
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_SHADER, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created shader %u type=%d size=%zu",
-        pShader->HostHandle, shaderType, bytecodeSize);
 }
 
 void APIENTRY PvgpuCreateVertexShader(
@@ -926,7 +855,6 @@ void APIENTRY PvgpuCreateVertexShader(
 {
     UNREFERENCED_PARAMETER(hRTShader);
     UNREFERENCED_PARAMETER(pSignatures);
-    
     PvgpuCreateShaderInternal(hDevice, pCode, hShader, PVGPU_SHADER_VERTEX);
 }
 
@@ -939,7 +867,6 @@ void APIENTRY PvgpuCreatePixelShader(
 {
     UNREFERENCED_PARAMETER(hRTShader);
     UNREFERENCED_PARAMETER(pSignatures);
-    
     PvgpuCreateShaderInternal(hDevice, pCode, hShader, PVGPU_SHADER_PIXEL);
 }
 
@@ -952,7 +879,6 @@ void APIENTRY PvgpuCreateGeometryShader(
 {
     UNREFERENCED_PARAMETER(hRTShader);
     UNREFERENCED_PARAMETER(pSignatures);
-    
     PvgpuCreateShaderInternal(hDevice, pCode, hShader, PVGPU_SHADER_GEOMETRY);
 }
 
@@ -965,7 +891,6 @@ void APIENTRY PvgpuCreateHullShader(
 {
     UNREFERENCED_PARAMETER(hRTShader);
     UNREFERENCED_PARAMETER(pSignatures);
-    
     PvgpuCreateShaderInternal(hDevice, pCode, hShader, PVGPU_SHADER_HULL);
 }
 
@@ -978,7 +903,6 @@ void APIENTRY PvgpuCreateDomainShader(
 {
     UNREFERENCED_PARAMETER(hRTShader);
     UNREFERENCED_PARAMETER(pSignatures);
-    
     PvgpuCreateShaderInternal(hDevice, pCode, hShader, PVGPU_SHADER_DOMAIN);
 }
 
@@ -993,10 +917,7 @@ void APIENTRY PvgpuDestroyShader(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pShader = (PVGPU_UMD_SHADER*)hShader.pDrvPrivate;
     
-    if (pShader == NULL || pShader->HostHandle == 0)
-    {
-        return;
-    }
+    if (pShader == NULL || pShader->HostHandle == 0) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_DESTROY_SHADER;
@@ -1004,8 +925,6 @@ void APIENTRY PvgpuDestroyShader(
     cmd.shader_id = pShader->HostHandle;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DESTROY_SHADER, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Destroyed shader %u", pShader->HostHandle);
 }
 
 /* ============================================================================
@@ -1031,7 +950,6 @@ void APIENTRY PvgpuDraw(
     cmd.start_instance = 0;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DRAW, &cmd, sizeof(cmd));
-    
     pDevice->DrawCallCount++;
 }
 
@@ -1056,7 +974,6 @@ void APIENTRY PvgpuDrawIndexed(
     cmd.start_instance = 0;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DRAW_INDEXED, &cmd, sizeof(cmd));
-    
     pDevice->DrawCallCount++;
 }
 
@@ -1081,7 +998,6 @@ void APIENTRY PvgpuDrawInstanced(
     cmd.start_instance = StartInstanceLocation;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DRAW_INSTANCED, &cmd, sizeof(cmd));
-    
     pDevice->DrawCallCount++;
 }
 
@@ -1108,17 +1024,13 @@ void APIENTRY PvgpuDrawIndexedInstanced(
     cmd.start_instance = StartInstanceLocation;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DRAW_INDEXED_INSTANCED, &cmd, sizeof(cmd));
-    
     pDevice->DrawCallCount++;
 }
 
 void APIENTRY PvgpuDrawAuto(
     _In_ D3D10DDI_HDEVICE hDevice)
 {
-    /* DrawAuto uses stream output to determine vertex count */
-    /* TODO: Implement when stream output is supported */
     UNREFERENCED_PARAMETER(hDevice);
-    
     PVGPU_TRACE("DrawAuto: Not implemented");
 }
 
@@ -1136,10 +1048,8 @@ void APIENTRY PvgpuClearRenderTargetView(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     
-    /* Get the resource handle from the RTV */
     {
         PVGPU_UMD_RENDER_TARGET_VIEW* pRTV = (PVGPU_UMD_RENDER_TARGET_VIEW*)hRenderTargetView.pDrvPrivate;
-        
         ZeroMemory(&cmd, sizeof(cmd));
         cmd.header.command_type = PVGPU_CMD_CLEAR_RENDER_TARGET;
         cmd.header.command_size = sizeof(cmd);
@@ -1163,13 +1073,10 @@ void APIENTRY PvgpuClearDepthStencilView(
     PVGPU_UMD_DEVICE* pDevice;
     PvgpuCmdClearDepthStencil cmd;
     
-    UNREFERENCED_PARAMETER(ClearFlags);
-    
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     
     {
         PVGPU_UMD_DEPTH_STENCIL_VIEW* pDSV = (PVGPU_UMD_DEPTH_STENCIL_VIEW*)hDepthStencilView.pDrvPrivate;
-        
         ZeroMemory(&cmd, sizeof(cmd));
         cmd.header.command_type = PVGPU_CMD_CLEAR_DEPTH_STENCIL;
         cmd.header.command_size = sizeof(cmd);
@@ -1183,7 +1090,7 @@ void APIENTRY PvgpuClearDepthStencilView(
 }
 
 /* ============================================================================
- * Pipeline State (Stubs - need implementation)
+ * Pipeline State
  * ============================================================================ */
 
 void APIENTRY PvgpuIaSetInputLayout(
@@ -1197,10 +1104,8 @@ void APIENTRY PvgpuIaSetInputLayout(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pLayout = (PVGPU_UMD_RESOURCE*)hInputLayout.pDrvPrivate;
     
-    /* Track current input layout */
     pDevice->PipelineState.InputLayout = pLayout ? pLayout->HostHandle : 0;
     
-    /* Build and submit command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.command_type = PVGPU_CMD_SET_INPUT_LAYOUT;
     cmd.command_size = sizeof(cmd);
@@ -1224,10 +1129,8 @@ void APIENTRY PvgpuIaSetVertexBuffers(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     
-    /* Limit to maximum supported */
     if (NumBuffers > 16) NumBuffers = 16;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_VERTEX_BUFFER;
     cmd.header.command_size = sizeof(cmd);
@@ -1241,7 +1144,6 @@ void APIENTRY PvgpuIaSetVertexBuffers(
         cmd.buffers[i].stride = pStrides[i];
         cmd.buffers[i].offset = pOffsets[i];
         
-        /* Track in device state */
         if (StartBuffer + i < PVGPU_UMD_MAX_VERTEX_BUFFERS)
         {
             pDevice->PipelineState.VertexBuffers[StartBuffer + i] = cmd.buffers[i].buffer_id;
@@ -1266,12 +1168,10 @@ void APIENTRY PvgpuIaSetIndexBuffer(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pBuffer = (PVGPU_UMD_RESOURCE*)hBuffer.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.IndexBuffer = pBuffer ? pBuffer->HostHandle : 0;
     pDevice->PipelineState.IndexBufferFormat = Format;
     pDevice->PipelineState.IndexBufferOffset = Offset;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_INDEX_BUFFER;
     cmd.header.command_size = sizeof(cmd);
@@ -1290,11 +1190,8 @@ void APIENTRY PvgpuIaSetTopology(
     PvgpuCmdSetPrimitiveTopology cmd;
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
-    
-    /* Track in device state */
     pDevice->PipelineState.PrimitiveTopology = (UINT32)PrimitiveTopology;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_PRIMITIVE_TOPOLOGY;
     cmd.header.command_size = sizeof(cmd);
@@ -1314,10 +1211,8 @@ void APIENTRY PvgpuVsSetShader(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pShader = (PVGPU_UMD_SHADER*)hShader.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.VertexShader = pShader ? pShader->HostHandle : 0;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_SHADER;
     cmd.header.command_size = sizeof(cmd);
@@ -1338,10 +1233,8 @@ void APIENTRY PvgpuPsSetShader(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pShader = (PVGPU_UMD_SHADER*)hShader.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.PixelShader = pShader ? pShader->HostHandle : 0;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_SHADER;
     cmd.header.command_size = sizeof(cmd);
@@ -1362,10 +1255,8 @@ void APIENTRY PvgpuGsSetShader(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pShader = (PVGPU_UMD_SHADER*)hShader.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.GeometryShader = pShader ? pShader->HostHandle : 0;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_SHADER;
     cmd.header.command_size = sizeof(cmd);
@@ -1386,10 +1277,8 @@ void APIENTRY PvgpuHsSetShader(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pShader = (PVGPU_UMD_SHADER*)hShader.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.HullShader = pShader ? pShader->HostHandle : 0;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_SHADER;
     cmd.header.command_size = sizeof(cmd);
@@ -1410,10 +1299,8 @@ void APIENTRY PvgpuDsSetShader(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pShader = (PVGPU_UMD_SHADER*)hShader.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.DomainShader = pShader ? pShader->HostHandle : 0;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_SHADER;
     cmd.header.command_size = sizeof(cmd);
@@ -1440,10 +1327,8 @@ void APIENTRY PvgpuSetRenderTargets(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pDSV = (PVGPU_UMD_RESOURCE*)hDepthStencilView.pDrvPrivate;
     
-    /* Limit to maximum supported */
     if (NumViews > 8) NumViews = 8;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_RENDER_TARGET;
     cmd.header.command_size = sizeof(cmd);
@@ -1454,8 +1339,6 @@ void APIENTRY PvgpuSetRenderTargets(
     {
         PVGPU_UMD_RESOURCE* pRTV = (PVGPU_UMD_RESOURCE*)phRenderTargetView[i].pDrvPrivate;
         cmd.rtv_ids[i] = pRTV ? pRTV->HostHandle : 0;
-        
-        /* Track in device state */
         pDevice->PipelineState.RenderTargets[i] = cmd.rtv_ids[i];
     }
     
@@ -1479,10 +1362,8 @@ void APIENTRY PvgpuSetViewports(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     
-    /* Limit to maximum supported */
     if (NumViewports > 16) NumViewports = 16;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_VIEWPORT;
     cmd.header.command_size = sizeof(cmd);
@@ -1517,10 +1398,8 @@ void APIENTRY PvgpuSetScissorRects(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     
-    /* Limit to maximum supported */
     if (NumRects > 16) NumRects = 16;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_SCISSOR;
     cmd.header.command_size = sizeof(cmd);
@@ -1552,7 +1431,6 @@ void APIENTRY PvgpuSetBlendState(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pBlendState = (PVGPU_UMD_RESOURCE*)hBlendState.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.BlendState = pBlendState ? pBlendState->HostHandle : 0;
     pDevice->PipelineState.BlendFactor[0] = BlendFactor[0];
     pDevice->PipelineState.BlendFactor[1] = BlendFactor[1];
@@ -1560,7 +1438,6 @@ void APIENTRY PvgpuSetBlendState(
     pDevice->PipelineState.BlendFactor[3] = BlendFactor[3];
     pDevice->PipelineState.SampleMask = SampleMask;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_BLEND_STATE;
     cmd.header.command_size = sizeof(cmd);
@@ -1586,11 +1463,9 @@ void APIENTRY PvgpuSetDepthStencilState(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pDSState = (PVGPU_UMD_RESOURCE*)hDepthStencilState.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.DepthStencilState = pDSState ? pDSState->HostHandle : 0;
     pDevice->PipelineState.StencilRef = StencilRef;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_DEPTH_STENCIL;
     cmd.header.command_size = sizeof(cmd);
@@ -1611,10 +1486,8 @@ void APIENTRY PvgpuSetRasterizerState(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pRSState = (PVGPU_UMD_RESOURCE*)hRasterizerState.pDrvPrivate;
     
-    /* Track in device state */
     pDevice->PipelineState.RasterizerState = pRSState ? pRSState->HostHandle : 0;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_SET_RASTERIZER_STATE;
     cmd.header.command_size = sizeof(cmd);
@@ -1641,12 +1514,8 @@ void APIENTRY PvgpuResourceCopy(
     pDst = (PVGPU_UMD_RESOURCE*)hDstResource.pDrvPrivate;
     pSrc = (PVGPU_UMD_RESOURCE*)hSrcResource.pDrvPrivate;
     
-    if (pDst == NULL || pSrc == NULL)
-    {
-        return;
-    }
+    if (pDst == NULL || pSrc == NULL) return;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_COPY_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
@@ -1676,12 +1545,8 @@ void APIENTRY PvgpuResourceCopyRegion(
     pDst = (PVGPU_UMD_RESOURCE*)hDstResource.pDrvPrivate;
     pSrc = (PVGPU_UMD_RESOURCE*)hSrcResource.pDrvPrivate;
     
-    if (pDst == NULL || pSrc == NULL)
-    {
-        return;
-    }
+    if (pDst == NULL || pSrc == NULL) return;
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_COPY_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
@@ -1693,7 +1558,6 @@ void APIENTRY PvgpuResourceCopyRegion(
     cmd.src_resource_id = pSrc->HostHandle;
     cmd.src_subresource = SrcSubresource;
     
-    /* Copy source box if provided */
     if (pSrcBox != NULL)
     {
         cmd.has_src_box = 1;
@@ -1732,12 +1596,8 @@ void APIENTRY PvgpuResourceUpdateSubresourceUP(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pDst = (PVGPU_UMD_RESOURCE*)hDstResource.pDrvPrivate;
     
-    if (pDst == NULL || pSysMemUP == NULL)
-    {
-        return;
-    }
+    if (pDst == NULL || pSysMemUP == NULL) return;
     
-    /* Calculate dimensions */
     if (pDstBox != NULL)
     {
         width = pDstBox->right - pDstBox->left;
@@ -1751,41 +1611,23 @@ void APIENTRY PvgpuResourceUpdateSubresourceUP(
         depth = pDst->Depth > 0 ? pDst->Depth : 1;
     }
     
-    /* Calculate data size */
-    if (depth > 1)
-    {
-        dataSize = (SIZE_T)DepthPitch * depth;
-    }
-    else if (height > 1)
-    {
-        dataSize = (SIZE_T)RowPitch * height;
-    }
-    else
-    {
-        dataSize = (SIZE_T)RowPitch;
-    }
+    if (depth > 1) dataSize = (SIZE_T)DepthPitch * depth;
+    else if (height > 1) dataSize = (SIZE_T)RowPitch * height;
+    else dataSize = (SIZE_T)RowPitch;
     
-    /* Try to allocate heap space and copy data */
     if (pDevice->SharedMemoryValid && pDevice->pHeap != NULL && dataSize > 0)
     {
         hr = PvgpuHeapAlloc(pDevice, (UINT32)dataSize, 16, &heapOffset);
         if (SUCCEEDED(hr))
         {
-            /* Copy data to shared memory heap */
-            UINT8* pDest = pDevice->pHeap + heapOffset;
-            CopyMemory(pDest, pSysMemUP, dataSize);
-            
-            PVGPU_TRACE("UpdateSubresourceUP: Copied %zu bytes to heap offset %u",
-                dataSize, heapOffset);
+            CopyMemory(pDevice->pHeap + heapOffset, pSysMemUP, dataSize);
         }
         else
         {
-            PVGPU_TRACE("UpdateSubresourceUP: Heap alloc failed, hr=0x%08X", hr);
             heapOffset = 0;
         }
     }
     
-    /* Build command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_UPDATE_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
@@ -1794,7 +1636,6 @@ void APIENTRY PvgpuResourceUpdateSubresourceUP(
     cmd.row_pitch = RowPitch;
     cmd.depth_pitch = DepthPitch;
     
-    /* Set destination region */
     if (pDstBox != NULL)
     {
         cmd.dst_x = pDstBox->left;
@@ -1818,9 +1659,6 @@ void APIENTRY PvgpuResourceUpdateSubresourceUP(
     cmd.data_size = (UINT32)dataSize;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_UPDATE_RESOURCE, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("UpdateSubresourceUP: resource %u subres %u size=%zu heap_offset=%u",
-        pDst->HostHandle, DstSubresource, dataSize, heapOffset);
 }
 
 void APIENTRY PvgpuResourceMap(
@@ -1843,42 +1681,26 @@ void APIENTRY PvgpuResourceMap(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)hResource.pDrvPrivate;
     
-    if (pResource == NULL || pMappedSubresource == NULL)
-    {
-        return;
-    }
+    if (pResource == NULL || pMappedSubresource == NULL) return;
     
-    /* Calculate map size - this is simplified, real impl would use format */
     if (pResource->Type == PVGPU_RESOURCE_TYPE_BUFFER)
     {
         mapSize = pResource->ByteWidth;
     }
     else
     {
-        /* For textures, estimate based on dimensions (4 bytes per pixel) */
         mapSize = (SIZE_T)pResource->Width * pResource->Height * 4;
     }
     
-    /* Default to failure */
     pMappedSubresource->pData = NULL;
     pMappedSubresource->RowPitch = 0;
     pMappedSubresource->DepthPitch = 0;
     
-    /* Try to allocate heap space */
-    if (!pDevice->SharedMemoryValid || pDevice->pHeap == NULL)
-    {
-        PVGPU_TRACE("ResourceMap: No shared memory available");
-        return;
-    }
+    if (!pDevice->SharedMemoryValid || pDevice->pHeap == NULL) return;
     
     hr = PvgpuHeapAlloc(pDevice, (UINT32)mapSize, 16, &heapOffset);
-    if (FAILED(hr))
-    {
-        PVGPU_TRACE("ResourceMap: Heap alloc failed for %zu bytes", mapSize);
-        return;
-    }
+    if (FAILED(hr)) return;
     
-    /* Build map command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_MAP_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
@@ -1889,10 +1711,8 @@ void APIENTRY PvgpuResourceMap(
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_MAP_RESOURCE, &cmd, sizeof(cmd));
     
-    /* For read maps, flush commands and wait for host to copy data */
     if (MapType == D3D10_DDI_MAP_READ || MapType == D3D10_DDI_MAP_READWRITE)
     {
-        /* Submit a fence and wait for it */
         UINT64 fenceValue = pDevice->NextFenceValue++;
         PvgpuCmdFence fenceCmd;
         
@@ -1904,28 +1724,21 @@ void APIENTRY PvgpuResourceMap(
         PvgpuWriteCommand(pDevice, PVGPU_CMD_FENCE, &fenceCmd, sizeof(fenceCmd));
         PvgpuFlushCommandBuffer(pDevice);
         
-        /* Wait for fence completion */
-        hr = PvgpuWaitFence(pDevice, fenceValue, 5000); /* 5 second timeout */
+        hr = PvgpuWaitFence(pDevice, fenceValue, 5000);
         if (FAILED(hr))
         {
-            PVGPU_TRACE("ResourceMap: Fence wait failed");
             PvgpuHeapFree(pDevice, heapOffset, (UINT32)mapSize);
             return;
         }
     }
     
-    /* Store mapping info */
     pResource->IsMapped = TRUE;
     pResource->MappedAddress = pDevice->pHeap + heapOffset;
     pResource->MappedSize = mapSize;
     
-    /* Return mapped pointer */
     pMappedSubresource->pData = pDevice->pHeap + heapOffset;
-    pMappedSubresource->RowPitch = pResource->Width * 4; /* Simplified - assume 4 bytes/pixel */
+    pMappedSubresource->RowPitch = pResource->Width * 4;
     pMappedSubresource->DepthPitch = pMappedSubresource->RowPitch * pResource->Height;
-    
-    PVGPU_TRACE("ResourceMap: resource %u subres %u -> heap offset %u size %zu",
-        pResource->HostHandle, Subresource, heapOffset, mapSize);
 }
 
 void APIENTRY PvgpuResourceUnmap(
@@ -1936,30 +1749,20 @@ void APIENTRY PvgpuResourceUnmap(
     PVGPU_UMD_DEVICE* pDevice;
     PVGPU_UMD_RESOURCE* pResource;
     PvgpuCmdUnmapResource cmd;
-    UINT32 heapOffset;
-    UINT32 heapSize;
+    UINT32 heapOffset = 0;
+    UINT32 heapSize = 0;
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)hResource.pDrvPrivate;
     
-    if (pResource == NULL || !pResource->IsMapped)
-    {
-        return;
-    }
+    if (pResource == NULL || !pResource->IsMapped) return;
     
-    /* Calculate heap offset from mapped address */
     if (pDevice->SharedMemoryValid && pResource->MappedAddress != NULL)
     {
         heapOffset = (UINT32)((UINT8*)pResource->MappedAddress - pDevice->pHeap);
         heapSize = (UINT32)pResource->MappedSize;
     }
-    else
-    {
-        heapOffset = 0;
-        heapSize = 0;
-    }
     
-    /* Build unmap command - host will copy data back to resource if needed */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_UNMAP_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
@@ -1969,22 +1772,16 @@ void APIENTRY PvgpuResourceUnmap(
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_UNMAP_RESOURCE, &cmd, sizeof(cmd));
     
-    /* Flush to ensure unmap is processed before we free heap */
     PvgpuFlushCommandBuffer(pDevice);
     
-    /* Free heap allocation */
     if (heapSize > 0)
     {
         PvgpuHeapFree(pDevice, heapOffset, heapSize);
     }
     
-    /* Mark resource as unmapped */
     pResource->IsMapped = FALSE;
     pResource->MappedAddress = NULL;
     pResource->MappedSize = 0;
-    
-    PVGPU_TRACE("ResourceUnmap: resource %u subres %u freed heap at %u",
-        pResource->HostHandle, Subresource, heapOffset);
 }
 
 /* ============================================================================
@@ -2002,50 +1799,33 @@ void APIENTRY PvgpuPresent(
     UINT syncInterval = 1;
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
+    if (pDevice == NULL) return;
     
-    if (pDevice == NULL)
-    {
-        return;
-    }
-    
-    /* Extract sync interval from present data if available */
     if (pPresentData != NULL)
     {
         syncInterval = pPresentData->SyncInterval;
     }
     
-    /* Async present: wait for the PREVIOUS frame's fence, not this one.
-     * This gives the host an entire frame interval to process commands,
-     * eliminating the 16.6ms stall that blocking on the current fence causes.
-     * Classic "double-buffered fence" approach used by real GPU drivers. */
-    if (pDevice->LastPresentFence > 0)
+    if (pDevice->LastPresentFence > 0 && syncInterval > 0)
     {
-        /* Only wait if vsync is enabled; tearing mode doesn't need sync */
-        if (syncInterval > 0)
+        if (pDevice->SharedMemoryValid &&
+            pDevice->pControlRegion->host_fence_completed < pDevice->LastPresentFence)
         {
-            /* Fast path: check shared memory fence first to avoid KMD escape */
-            if (pDevice->SharedMemoryValid &&
-                pDevice->pControlRegion->host_fence_completed < pDevice->LastPresentFence)
-            {
-                PvgpuWaitFence(pDevice, pDevice->LastPresentFence, 100);
-            }
+            PvgpuWaitFence(pDevice, pDevice->LastPresentFence, 100);
         }
     }
     
-    /* Allocate fence value for this present */
     fenceValue = pDevice->NextFenceValue++;
     
-    /* Submit present command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_PRESENT;
     cmd.header.command_size = sizeof(cmd);
-    cmd.backbuffer_id = 0; /* Default backbuffer - TODO: extract from pPresentData->hSurfaceToPresent */
+    cmd.backbuffer_id = 0;
     cmd.sync_interval = syncInterval;
     cmd.flags = 0;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_PRESENT, &cmd, sizeof(cmd));
     
-    /* Submit fence command to know when present is done */
     ZeroMemory(&fenceCmd, sizeof(fenceCmd));
     fenceCmd.header.command_type = PVGPU_CMD_FENCE;
     fenceCmd.header.command_size = sizeof(fenceCmd);
@@ -2053,14 +1833,10 @@ void APIENTRY PvgpuPresent(
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_FENCE, &fenceCmd, sizeof(fenceCmd));
     
-    /* Flush commands to ring buffer */
     PvgpuFlushCommandBuffer(pDevice);
     
-    /* Track this frame's fence for next present's wait */
     pDevice->LastPresentFence = fenceValue;
     pDevice->LastFenceSubmitted = fenceValue;
-    
-    PVGPU_TRACE("Present: sync_interval=%u fence=%llu", syncInterval, (unsigned long long)fenceValue);
 }
 
 void APIENTRY PvgpuBlt(
@@ -2073,21 +1849,13 @@ void APIENTRY PvgpuBlt(
     PVGPU_UMD_RESOURCE* pDst;
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
-    
-    if (pDevice == NULL || pBltData == NULL)
-    {
-        return;
-    }
+    if (pDevice == NULL || pBltData == NULL) return;
     
     pSrc = (PVGPU_UMD_RESOURCE*)pBltData->hSrcResource.pDrvPrivate;
     pDst = (PVGPU_UMD_RESOURCE*)pBltData->hDstResource.pDrvPrivate;
     
-    if (pSrc == NULL || pDst == NULL)
-    {
-        return;
-    }
+    if (pSrc == NULL || pDst == NULL) return;
     
-    /* Build copy command for blt */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_COPY_RESOURCE;
     cmd.header.command_size = sizeof(cmd);
@@ -2095,8 +1863,6 @@ void APIENTRY PvgpuBlt(
     cmd.dst_resource_id = pDst->HostHandle;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_COPY_RESOURCE, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Blt: src=%u dst=%u", pSrc->HostHandle, pDst->HostHandle);
 }
 
 HRESULT APIENTRY PvgpuResizeBuffers(
@@ -2110,27 +1876,16 @@ HRESULT APIENTRY PvgpuResizeBuffers(
     HRESULT hr;
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
+    if (pDevice == NULL || pResizeData == NULL) return E_INVALIDARG;
     
-    if (pDevice == NULL || pResizeData == NULL)
-    {
-        return E_INVALIDARG;
-    }
-    
-    PVGPU_TRACE("ResizeBuffers: %ux%u format=%u buffers=%u",
-        pResizeData->Width, pResizeData->Height,
-        pResizeData->Format, pResizeData->BufferCount);
-    
-    /* Flush any pending commands before resize */
     PvgpuFlushCommandBuffer(pDevice);
     
-    /* Allocate fence value for resize completion */
     fenceValue = pDevice->NextFenceValue++;
     
-    /* Build resize buffers command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_RESIZE_BUFFERS;
     cmd.header.command_size = sizeof(cmd);
-    cmd.swapchain_id = 0; /* Default swapchain */
+    cmd.swapchain_id = 0;
     cmd.width = pResizeData->Width;
     cmd.height = pResizeData->Height;
     cmd.format = pResizeData->Format;
@@ -2139,7 +1894,6 @@ HRESULT APIENTRY PvgpuResizeBuffers(
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_RESIZE_BUFFERS, &cmd, sizeof(cmd));
     
-    /* Submit fence to know when resize is complete */
     ZeroMemory(&fenceCmd, sizeof(fenceCmd));
     fenceCmd.header.command_type = PVGPU_CMD_FENCE;
     fenceCmd.header.command_size = sizeof(fenceCmd);
@@ -2147,18 +1901,11 @@ HRESULT APIENTRY PvgpuResizeBuffers(
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_FENCE, &fenceCmd, sizeof(fenceCmd));
     
-    /* Flush and wait for resize to complete */
     PvgpuFlushCommandBuffer(pDevice);
     
-    hr = PvgpuWaitFence(pDevice, fenceValue, 5000); /* 5 second timeout */
-    if (FAILED(hr))
-    {
-        PVGPU_TRACE("ResizeBuffers: Fence wait failed, hr=0x%08X", hr);
-        /* Continue anyway - resize may have succeeded */
-    }
+    hr = PvgpuWaitFence(pDevice, fenceValue, 5000);
     
     pDevice->LastFenceSubmitted = fenceValue;
-    
     return S_OK;
 }
 
@@ -2190,15 +1937,12 @@ void APIENTRY PvgpuCreateBlendState(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_BLEND_STATE*)hBlendState.pDrvPrivate;
-    
     if (pState == NULL) return;
     
-    /* Initialize state tracking */
     pState->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pState->AlphaToCoverageEnable = pBlendDesc->AlphaToCoverageEnable;
     pState->IndependentBlendEnable = pBlendDesc->IndependentBlendEnable;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_BLEND_STATE;
     cmd.header.command_size = sizeof(cmd);
@@ -2219,8 +1963,6 @@ void APIENTRY PvgpuCreateBlendState(
     }
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_BLEND_STATE, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created blend state %u", pState->HostHandle);
 }
 
 void APIENTRY PvgpuDestroyBlendState(
@@ -2233,7 +1975,6 @@ void APIENTRY PvgpuDestroyBlendState(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_BLEND_STATE*)hBlendState.pDrvPrivate;
-    
     if (pState == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2267,15 +2008,12 @@ void APIENTRY PvgpuCreateRasterizerState(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_RASTERIZER_STATE*)hRasterizerState.pDrvPrivate;
-    
     if (pState == NULL) return;
     
-    /* Initialize state tracking */
     pState->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pState->FillMode = pRasterizerDesc->FillMode;
     pState->CullMode = pRasterizerDesc->CullMode;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_RASTERIZER_STATE;
     cmd.header.command_size = sizeof(cmd);
@@ -2292,8 +2030,6 @@ void APIENTRY PvgpuCreateRasterizerState(
     cmd.antialiased_line_enable = pRasterizerDesc->AntialiasedLineEnable;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_RASTERIZER_STATE, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created rasterizer state %u", pState->HostHandle);
 }
 
 void APIENTRY PvgpuDestroyRasterizerState(
@@ -2306,7 +2042,6 @@ void APIENTRY PvgpuDestroyRasterizerState(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_RASTERIZER_STATE*)hRasterizerState.pDrvPrivate;
-    
     if (pState == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2340,15 +2075,12 @@ void APIENTRY PvgpuCreateDepthStencilState(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_DEPTH_STENCIL_STATE*)hDepthStencilState.pDrvPrivate;
-    
     if (pState == NULL) return;
     
-    /* Initialize state tracking */
     pState->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pState->DepthEnable = pDepthStencilDesc->DepthEnable;
     pState->StencilEnable = pDepthStencilDesc->StencilEnable;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_DEPTH_STENCIL_STATE;
     cmd.header.command_size = sizeof(cmd);
@@ -2369,8 +2101,6 @@ void APIENTRY PvgpuCreateDepthStencilState(
     cmd.back_face.stencil_func = pDepthStencilDesc->BackFace.StencilFunc;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_DEPTH_STENCIL_STATE, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created depth stencil state %u", pState->HostHandle);
 }
 
 void APIENTRY PvgpuDestroyDepthStencilState(
@@ -2383,7 +2113,6 @@ void APIENTRY PvgpuDestroyDepthStencilState(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_DEPTH_STENCIL_STATE*)hDepthStencilState.pDrvPrivate;
-    
     if (pState == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2417,17 +2146,14 @@ void APIENTRY PvgpuCreateSampler(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_SAMPLER*)hSampler.pDrvPrivate;
-    
     if (pState == NULL) return;
     
-    /* Initialize state tracking */
     pState->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pState->Filter = pSamplerDesc->Filter;
     pState->AddressU = pSamplerDesc->AddressU;
     pState->AddressV = pSamplerDesc->AddressV;
     pState->AddressW = pSamplerDesc->AddressW;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_SAMPLER;
     cmd.header.command_size = sizeof(cmd);
@@ -2447,8 +2173,6 @@ void APIENTRY PvgpuCreateSampler(
     cmd.max_lod = pSamplerDesc->MaxLOD;
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_SAMPLER, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created sampler %u", pState->HostHandle);
 }
 
 void APIENTRY PvgpuDestroySampler(
@@ -2461,7 +2185,6 @@ void APIENTRY PvgpuDestroySampler(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pState = (PVGPU_UMD_SAMPLER*)hSampler.pDrvPrivate;
-    
     if (pState == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2496,14 +2219,11 @@ void APIENTRY PvgpuCreateElementLayout(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pLayout = (PVGPU_UMD_INPUT_LAYOUT*)hElementLayout.pDrvPrivate;
-    
     if (pLayout == NULL) return;
     
-    /* Initialize layout tracking */
     pLayout->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pLayout->NumElements = pCreateElementLayout->NumElements;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_INPUT_LAYOUT;
     cmd.header.command_size = sizeof(cmd);
@@ -2512,28 +2232,25 @@ void APIENTRY PvgpuCreateElementLayout(
     
     for (i = 0; i < cmd.num_elements; i++)
     {
-        /* Copy semantic name string to shared memory */
+        PCSTR pSemanticName = pCreateElementLayout->pVertexElements[i].InputSemanticName;
+        if (pSemanticName != NULL && pDevice->SharedMemoryValid && pDevice->pHeap != NULL)
         {
-            PCSTR pSemanticName = pCreateElementLayout->pVertexElements[i].InputSemanticName;
-            if (pSemanticName != NULL && pDevice->SharedMemoryValid && pDevice->pHeap != NULL)
+            SIZE_T nameLen = strlen(pSemanticName) + 1;
+            UINT32 nameOffset = 0;
+            HRESULT hr = PvgpuHeapAlloc(pDevice, (UINT32)nameLen, 4, &nameOffset);
+            if (SUCCEEDED(hr))
             {
-                SIZE_T nameLen = strlen(pSemanticName) + 1; /* Include null terminator */
-                UINT32 nameOffset = 0;
-                HRESULT hr = PvgpuHeapAlloc(pDevice, (UINT32)nameLen, 4, &nameOffset);
-                if (SUCCEEDED(hr))
-                {
-                    CopyMemory(pDevice->pHeap + nameOffset, pSemanticName, nameLen);
-                    cmd.elements[i].semantic_name_offset = nameOffset;
-                }
-                else
-                {
-                    cmd.elements[i].semantic_name_offset = 0;
-                }
+                CopyMemory(pDevice->pHeap + nameOffset, pSemanticName, nameLen);
+                cmd.elements[i].semantic_name_offset = nameOffset;
             }
             else
             {
                 cmd.elements[i].semantic_name_offset = 0;
             }
+        }
+        else
+        {
+            cmd.elements[i].semantic_name_offset = 0;
         }
         cmd.elements[i].semantic_index = pCreateElementLayout->pVertexElements[i].SemanticIndex;
         cmd.elements[i].format = pCreateElementLayout->pVertexElements[i].Format;
@@ -2544,8 +2261,6 @@ void APIENTRY PvgpuCreateElementLayout(
     }
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_INPUT_LAYOUT, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created input layout %u with %u elements", pLayout->HostHandle, cmd.num_elements);
 }
 
 void APIENTRY PvgpuDestroyElementLayout(
@@ -2558,7 +2273,6 @@ void APIENTRY PvgpuDestroyElementLayout(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pLayout = (PVGPU_UMD_INPUT_LAYOUT*)hElementLayout.pDrvPrivate;
-    
     if (pLayout == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2598,15 +2312,12 @@ void APIENTRY PvgpuCreateRenderTargetView(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pView = (PVGPU_UMD_RENDER_TARGET_VIEW*)hRenderTargetView.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)pCreateRenderTargetView->hDrvResource.pDrvPrivate;
-    
     if (pView == NULL) return;
     
-    /* Initialize view tracking */
     pView->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pView->ResourceHandle = pResource ? pResource->HostHandle : 0;
     pView->Format = pCreateRenderTargetView->Format;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_RENDER_TARGET_VIEW;
     cmd.header.command_size = sizeof(cmd);
@@ -2615,7 +2326,6 @@ void APIENTRY PvgpuCreateRenderTargetView(
     cmd.format = pCreateRenderTargetView->Format;
     cmd.view_dimension = pCreateRenderTargetView->ResourceDimension;
     
-    /* Copy dimension-specific data */
     switch (pCreateRenderTargetView->ResourceDimension)
     {
     case D3D10DDIRESOURCE_TEXTURE2D:
@@ -2631,8 +2341,6 @@ void APIENTRY PvgpuCreateRenderTargetView(
     }
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_RENDER_TARGET_VIEW, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created RTV %u for resource %u", pView->HostHandle, pView->ResourceHandle);
 }
 
 void APIENTRY PvgpuDestroyRenderTargetView(
@@ -2645,7 +2353,6 @@ void APIENTRY PvgpuDestroyRenderTargetView(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pView = (PVGPU_UMD_RENDER_TARGET_VIEW*)hRenderTargetView.pDrvPrivate;
-    
     if (pView == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2681,15 +2388,12 @@ void APIENTRY PvgpuCreateDepthStencilView(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pView = (PVGPU_UMD_DEPTH_STENCIL_VIEW*)hDepthStencilView.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)pCreateDepthStencilView->hDrvResource.pDrvPrivate;
-    
     if (pView == NULL) return;
     
-    /* Initialize view tracking */
     pView->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pView->ResourceHandle = pResource ? pResource->HostHandle : 0;
     pView->Format = pCreateDepthStencilView->Format;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_DEPTH_STENCIL_VIEW;
     cmd.header.command_size = sizeof(cmd);
@@ -2699,7 +2403,6 @@ void APIENTRY PvgpuCreateDepthStencilView(
     cmd.view_dimension = pCreateDepthStencilView->ResourceDimension;
     cmd.flags = pCreateDepthStencilView->Flags;
     
-    /* Copy dimension-specific data */
     switch (pCreateDepthStencilView->ResourceDimension)
     {
     case D3D10DDIRESOURCE_TEXTURE2D:
@@ -2715,8 +2418,6 @@ void APIENTRY PvgpuCreateDepthStencilView(
     }
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_DEPTH_STENCIL_VIEW, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created DSV %u for resource %u", pView->HostHandle, pView->ResourceHandle);
 }
 
 void APIENTRY PvgpuDestroyDepthStencilView(
@@ -2729,7 +2430,6 @@ void APIENTRY PvgpuDestroyDepthStencilView(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pView = (PVGPU_UMD_DEPTH_STENCIL_VIEW*)hDepthStencilView.pDrvPrivate;
-    
     if (pView == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2765,15 +2465,12 @@ void APIENTRY PvgpuCreateShaderResourceView(
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pView = (PVGPU_UMD_SHADER_RESOURCE_VIEW*)hShaderResourceView.pDrvPrivate;
     pResource = (PVGPU_UMD_RESOURCE*)pCreateShaderResourceView->hDrvResource.pDrvPrivate;
-    
     if (pView == NULL) return;
     
-    /* Initialize view tracking */
     pView->HostHandle = PvgpuAllocateResourceHandle(pDevice);
     pView->ResourceHandle = pResource ? pResource->HostHandle : 0;
     pView->Format = pCreateShaderResourceView->Format;
     
-    /* Build create command */
     ZeroMemory(&cmd, sizeof(cmd));
     cmd.header.command_type = PVGPU_CMD_CREATE_SHADER_RESOURCE_VIEW;
     cmd.header.command_size = sizeof(cmd);
@@ -2782,7 +2479,6 @@ void APIENTRY PvgpuCreateShaderResourceView(
     cmd.format = pCreateShaderResourceView->Format;
     cmd.view_dimension = pCreateShaderResourceView->ResourceDimension;
     
-    /* Copy dimension-specific data */
     switch (pCreateShaderResourceView->ResourceDimension)
     {
     case D3D10DDIRESOURCE_TEXTURE2D:
@@ -2804,8 +2500,6 @@ void APIENTRY PvgpuCreateShaderResourceView(
     }
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_CREATE_SHADER_RESOURCE_VIEW, &cmd, sizeof(cmd));
-    
-    PVGPU_TRACE("Created SRV %u for resource %u", pView->HostHandle, pView->ResourceHandle);
 }
 
 void APIENTRY PvgpuDestroyShaderResourceView(
@@ -2818,7 +2512,6 @@ void APIENTRY PvgpuDestroyShaderResourceView(
     
     pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     pView = (PVGPU_UMD_SHADER_RESOURCE_VIEW*)hShaderResourceView.pDrvPrivate;
-    
     if (pView == NULL) return;
     
     ZeroMemory(&cmd, sizeof(cmd));
@@ -2854,7 +2547,7 @@ static void PvgpuSetConstantBuffersInternal(
         cmd.slot = StartBuffer + i;
         cmd.buffer_id = pBuffer ? pBuffer->HostHandle : 0;
         cmd.offset = 0;
-        cmd.size = pBuffer ? pBuffer->ByteWidth / 16 : 0; /* Size in 16-byte constants */
+        cmd.size = pBuffer ? pBuffer->ByteWidth / 16 : 0;
         
         PvgpuWriteCommand(pDevice, PVGPU_CMD_SET_CONSTANT_BUFFER, &cmd, sizeof(cmd));
     }
@@ -3004,7 +2697,7 @@ void APIENTRY PvgpuGsSetSamplers(
 }
 
 /* ============================================================================
- * Hull/Domain Shader Stage Binding Functions
+ * Hull/Domain Shader Stage Binding Functions (Only used if D3D11 negotiated)
  * ============================================================================ */
 
 void APIENTRY PvgpuHsSetConstantBuffers(
@@ -3068,12 +2761,9 @@ void APIENTRY PvgpuDsSetSamplers(
 }
 
 /* ============================================================================
- * Compute Shader DDI Functions
+ * Compute Shader DDI Functions (Only used if D3D11 negotiated)
  * ============================================================================ */
 
-/*
- * PvgpuCsSetShader - Set the compute shader
- */
 void APIENTRY PvgpuCsSetShader(
     _In_ D3D10DDI_HDEVICE hDevice,
     _In_ D3D10DDI_HSHADER hShader)
@@ -3093,9 +2783,6 @@ void APIENTRY PvgpuCsSetShader(
     PvgpuWriteCommand(pDevice, PVGPU_CMD_SET_SHADER, &cmd, sizeof(cmd));
 }
 
-/*
- * PvgpuCsSetConstantBuffers - Set constant buffers for compute shader stage
- */
 void APIENTRY PvgpuCsSetConstantBuffers(
     _In_ D3D10DDI_HDEVICE hDevice,
     _In_ UINT StartBuffer,
@@ -3106,9 +2793,6 @@ void APIENTRY PvgpuCsSetConstantBuffers(
     PvgpuSetConstantBuffersInternal(pDevice, PVGPU_STAGE_COMPUTE, StartBuffer, NumBuffers, phBuffers);
 }
 
-/*
- * PvgpuCsSetShaderResources - Set shader resource views for compute shader stage
- */
 void APIENTRY PvgpuCsSetShaderResources(
     _In_ D3D10DDI_HDEVICE hDevice,
     _In_ UINT Offset,
@@ -3119,9 +2803,6 @@ void APIENTRY PvgpuCsSetShaderResources(
     PvgpuSetShaderResourcesInternal(pDevice, PVGPU_STAGE_COMPUTE, Offset, NumViews, phShaderResourceViews);
 }
 
-/*
- * PvgpuCsSetSamplers - Set samplers for compute shader stage
- */
 void APIENTRY PvgpuCsSetSamplers(
     _In_ D3D10DDI_HDEVICE hDevice,
     _In_ UINT Offset,
@@ -3132,9 +2813,6 @@ void APIENTRY PvgpuCsSetSamplers(
     PvgpuSetSamplersInternal(pDevice, PVGPU_STAGE_COMPUTE, Offset, NumSamplers, phSamplers);
 }
 
-/*
- * PvgpuCsSetUnorderedAccessViews - Set UAVs for compute shader stage
- */
 void APIENTRY PvgpuCsSetUnorderedAccessViews(
     _In_ D3D10DDI_HDEVICE hDevice,
     _In_ UINT Offset,
@@ -3144,7 +2822,6 @@ void APIENTRY PvgpuCsSetUnorderedAccessViews(
 {
     PVGPU_UMD_DEVICE* pDevice = (PVGPU_UMD_DEVICE*)hDevice.pDrvPrivate;
     UINT i;
-    
     UNREFERENCED_PARAMETER(pUAVInitialCounts);
     
     for (i = 0; i < NumViews && (Offset + i) < D3D11_1_UAV_SLOT_COUNT; i++) {
@@ -3167,9 +2844,6 @@ void APIENTRY PvgpuCsSetUnorderedAccessViews(
     }
 }
 
-/*
- * PvgpuDispatch - Dispatch compute shader execution
- */
 void APIENTRY PvgpuDispatch(
     _In_ D3D10DDI_HDEVICE hDevice,
     _In_ UINT ThreadGroupCountX,
@@ -3189,9 +2863,6 @@ void APIENTRY PvgpuDispatch(
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DISPATCH, &cmd, sizeof(cmd));
 }
 
-/*
- * PvgpuDispatchIndirect - Dispatch compute shader with indirect args
- */
 void APIENTRY PvgpuDispatchIndirect(
     _In_ D3D10DDI_HDEVICE hDevice,
     _In_ D3D10DDI_HRESOURCE hBufferForArgs,
@@ -3204,12 +2875,11 @@ void APIENTRY PvgpuDispatchIndirect(
     cmd.header.command_type = PVGPU_CMD_DISPATCH;
     cmd.header.command_size = sizeof(cmd);
     
-    /* For indirect dispatch, we encode the buffer resource and offset */
     if (hBufferForArgs.pDrvPrivate != NULL) {
         PVGPU_UMD_RESOURCE* pResource = (PVGPU_UMD_RESOURCE*)hBufferForArgs.pDrvPrivate;
         cmd.thread_group_count_x = pResource->HostHandle;
         cmd.thread_group_count_y = AlignedByteOffsetForArgs;
-        cmd.thread_group_count_z = 0xFFFFFFFF; /* sentinel: indirect dispatch */
+        cmd.thread_group_count_z = 0xFFFFFFFF;
     }
     
     PvgpuWriteCommand(pDevice, PVGPU_CMD_DISPATCH, &cmd, sizeof(cmd));
@@ -3219,12 +2889,6 @@ void APIENTRY PvgpuDispatchIndirect(
  * Command Buffer Helpers
  * ============================================================================ */
 
-/*
- * PvgpuWriteCommand - Write a command to the staging buffer
- * 
- * Commands are first written to a local staging buffer, then copied
- * to the shared memory ring buffer on flush.
- */
 BOOL PvgpuWriteCommand(
     _In_ PVGPU_UMD_DEVICE* pDevice,
     _In_ UINT32 CommandType,
@@ -3232,7 +2896,6 @@ BOOL PvgpuWriteCommand(
     _In_ SIZE_T PayloadSize)
 {
     SIZE_T alignedSize;
-
     if (!pDevice || !pDevice->pStagingBuffer || !pPayload || PayloadSize < sizeof(PvgpuCommandHeader))
         return FALSE;
 
@@ -3248,19 +2911,9 @@ BOOL PvgpuWriteCommand(
 
     pDevice->StagingOffset += alignedSize;
     pDevice->CommandsSubmitted++;
-
     return TRUE;
 }
 
-/*
- * PvgpuFlushCommandBuffer - Copy staged commands to ring buffer and notify host
- * 
- * This function:
- * 1. Waits if ring buffer is full (producer would catch up to consumer)
- * 2. Copies commands from staging buffer to ring buffer
- * 3. Updates producer pointer atomically
- * 4. Rings doorbell to wake up host backend
- */
 void PvgpuFlushCommandBuffer(
     _In_ PVGPU_UMD_DEVICE* pDevice)
 {
@@ -3271,25 +2924,17 @@ void PvgpuFlushCommandBuffer(
     SIZE_T firstChunkSize;
     SIZE_T secondChunkSize;
     
-    if (pDevice == NULL || pDevice->StagingOffset == 0)
-    {
-        return;
-    }
+    if (pDevice == NULL || pDevice->StagingOffset == 0) return;
     
-    /* If shared memory not available, just clear staging buffer */
     if (!pDevice->SharedMemoryValid || pDevice->pRingBuffer == NULL)
     {
-        PVGPU_TRACE("FlushCommandBuffer: No shared memory, discarding %zu bytes",
-            pDevice->StagingOffset);
         pDevice->StagingOffset = 0;
         return;
     }
     
     EnterCriticalSection(&pDevice->RingLock);
-    
     spaceNeeded = pDevice->StagingOffset;
     
-    /* Wait for space in ring buffer */
     for (;;)
     {
         UINT64 producer = pDevice->LocalProducerPtr;
@@ -3297,84 +2942,46 @@ void PvgpuFlushCommandBuffer(
         UINT64 used = producer - consumer;
         
         spaceAvailable = pDevice->RingBufferSize - (SIZE_T)used;
+        if (spaceAvailable >= spaceNeeded) break;
         
-        if (spaceAvailable >= spaceNeeded)
-        {
-            break;
-        }
-        
-        /* Ring is full, need to wait for consumer to catch up */
-        /* Hybrid spin-then-yield strategy for low latency */
         {
             static UINT spinCount = 0;
             spinCount++;
-            
             LeaveCriticalSection(&pDevice->RingLock);
             
-            if (spinCount < 100)
-            {
-                /* Spin: lowest latency for short waits */
-                YieldProcessor();
-            }
-            else if (spinCount < 500)
-            {
-                /* Yield: give other threads a chance */
-                SwitchToThread();
-            }
-            else
-            {
-                /* Sleep: prevent CPU waste on long waits */
-                Sleep(1);
-            }
+            if (spinCount < 100) YieldProcessor();
+            else if (spinCount < 500) SwitchToThread();
+            else Sleep(1);
             
             EnterCriticalSection(&pDevice->RingLock);
-            
-            /* Reset spin count when we acquire space */
-            if (spinCount >= 500)
-            {
-                spinCount = 0;
-            }
+            if (spinCount >= 500) spinCount = 0;
         }
     }
     
-    /* Calculate write position (ring buffer is circular) */
     writeOffset = (SIZE_T)(pDevice->LocalProducerPtr % pDevice->RingBufferSize);
     pWritePtr = pDevice->pRingBuffer + writeOffset;
     
-    /* Handle wrap-around */
     if (writeOffset + spaceNeeded <= pDevice->RingBufferSize)
     {
-        /* Single copy - no wrap */
         CopyMemory(pWritePtr, pDevice->pStagingBuffer, spaceNeeded);
     }
     else
     {
-        /* Two copies - wrap around */
         firstChunkSize = pDevice->RingBufferSize - writeOffset;
         secondChunkSize = spaceNeeded - firstChunkSize;
         
         CopyMemory(pWritePtr, pDevice->pStagingBuffer, firstChunkSize);
-        CopyMemory(pDevice->pRingBuffer, 
-                   pDevice->pStagingBuffer + firstChunkSize, 
-                   secondChunkSize);
+        CopyMemory(pDevice->pRingBuffer, pDevice->pStagingBuffer + firstChunkSize, secondChunkSize);
     }
     
-    /* Memory barrier before updating producer pointer */
     MemoryBarrier();
-    
-    /* Update producer pointer atomically */
     pDevice->LocalProducerPtr += spaceNeeded;
     pDevice->pControlRegion->producer_ptr = pDevice->LocalProducerPtr;
-    
-    /* Another barrier to ensure write is visible */
     MemoryBarrier();
     
     LeaveCriticalSection(&pDevice->RingLock);
     
-    /* Ring doorbell to notify host */
     PvgpuRingDoorbell(pDevice);
-    
-    /* Clear staging buffer */
     pDevice->StagingOffset = 0;
 }
 
@@ -3382,11 +2989,9 @@ UINT32 PvgpuAllocateResourceHandle(
     _In_ PVGPU_UMD_DEVICE* pDevice)
 {
     UINT32 handle;
-    
     EnterCriticalSection(&pDevice->ResourceLock);
     handle = pDevice->NextResourceHandle++;
     LeaveCriticalSection(&pDevice->ResourceLock);
-    
     return handle;
 }
 
@@ -3395,12 +3000,7 @@ PVGPU_UMD_RESOURCE* PvgpuGetResource(
     _In_ D3D10DDI_HRESOURCE hResource)
 {
     UNREFERENCED_PARAMETER(pDevice);
-    
-    if (hResource.pDrvPrivate == NULL)
-    {
-        return NULL;
-    }
-    
+    if (hResource.pDrvPrivate == NULL) return NULL;
     return (PVGPU_UMD_RESOURCE*)hResource.pDrvPrivate;
 }
 
@@ -3408,11 +3008,6 @@ PVGPU_UMD_RESOURCE* PvgpuGetResource(
  * KMD Escape Helpers
  * ============================================================================ */
 
-/*
- * PvgpuEscape - Call KMD escape interface
- * 
- * This uses the D3D runtime callback to call DxgkDdiEscape in the KMD.
- */
 HRESULT PvgpuEscape(
     _In_ PVGPU_UMD_DEVICE* pDevice,
     _Inout_ void* pEscapeData,
@@ -3421,16 +3016,8 @@ HRESULT PvgpuEscape(
     D3DDDICB_ESCAPE escapeData;
     HRESULT hr;
     
-    if (pDevice == NULL || pDevice->pKTCallbacks == NULL)
-    {
-        return E_INVALIDARG;
-    }
-    
-    if (pDevice->pKTCallbacks->pfnEscapeCb == NULL)
-    {
-        PVGPU_TRACE("PvgpuEscape: pfnEscapeCb is NULL");
-        return E_NOTIMPL;
-    }
+    if (pDevice == NULL || pDevice->pKTCallbacks == NULL) return E_INVALIDARG;
+    if (pDevice->pKTCallbacks->pfnEscapeCb == NULL) return E_NOTIMPL;
     
     ZeroMemory(&escapeData, sizeof(escapeData));
     escapeData.hDevice = pDevice->hRTDevice.handle;
@@ -3440,48 +3027,25 @@ HRESULT PvgpuEscape(
     escapeData.hContext = NULL;
     
     hr = pDevice->pKTCallbacks->pfnEscapeCb(pDevice->hRTDevice.handle, &escapeData);
-    
-    if (FAILED(hr))
-    {
-        PVGPU_TRACE("PvgpuEscape: pfnEscapeCb failed, hr=0x%08X", hr);
-    }
-    
     return hr;
 }
 
-/*
- * PvgpuInitSharedMemory - Initialize shared memory access
- * 
- * Calls PVGPU_ESCAPE_GET_SHMEM_INFO to get shared memory info from KMD.
- */
 HRESULT PvgpuInitSharedMemory(
     _In_ PVGPU_UMD_DEVICE* pDevice)
 {
     PvgpuEscapeGetShmemInfo info;
     HRESULT hr;
     
-    if (pDevice == NULL)
-    {
-        return E_INVALIDARG;
-    }
+    if (pDevice == NULL) return E_INVALIDARG;
     
     ZeroMemory(&info, sizeof(info));
     info.header.escape_code = PVGPU_ESCAPE_GET_SHMEM_INFO;
     
     hr = PvgpuEscape(pDevice, &info, sizeof(info));
-    if (FAILED(hr))
-    {
-        PVGPU_TRACE("PvgpuInitSharedMemory: Escape failed, hr=0x%08X", hr);
-        return hr;
-    }
+    if (FAILED(hr)) return hr;
     
-    if (info.header.status != PVGPU_ERROR_SUCCESS)
-    {
-        PVGPU_TRACE("PvgpuInitSharedMemory: KMD returned error 0x%X", info.header.status);
-        return E_FAIL;
-    }
+    if (info.header.status != PVGPU_ERROR_SUCCESS) return E_FAIL;
     
-    /* Store shared memory info */
     pDevice->pSharedMemory = (void*)(ULONG_PTR)info.shmem_base;
     pDevice->SharedMemorySize = info.shmem_size;
     pDevice->pControlRegion = (PvgpuControlRegion*)pDevice->pSharedMemory;
@@ -3492,25 +3056,13 @@ HRESULT PvgpuInitSharedMemory(
     pDevice->HeapOffset = info.heap_offset;
     pDevice->NegotiatedFeatures = info.features;
     
-    /* Sync our local producer pointer with current value */
     pDevice->LocalProducerPtr = pDevice->pControlRegion->producer_ptr;
-    
     pDevice->SharedMemoryValid = TRUE;
     pDevice->BackendConnected = TRUE;
-    
-    PVGPU_TRACE("SharedMemory init: base=%p size=%u ring=%u heap=%u features=0x%llX",
-        pDevice->pSharedMemory,
-        info.shmem_size,
-        info.ring_size,
-        info.heap_size,
-        (unsigned long long)info.features);
     
     return S_OK;
 }
 
-/*
- * PvgpuHeapAlloc - Allocate from shared memory heap via KMD
- */
 HRESULT PvgpuHeapAlloc(
     _In_ PVGPU_UMD_DEVICE* pDevice,
     _In_ UINT32 Size,
@@ -3520,11 +3072,7 @@ HRESULT PvgpuHeapAlloc(
     PvgpuEscapeAllocHeap alloc;
     HRESULT hr;
     
-    if (pDevice == NULL || pOffset == NULL)
-    {
-        return E_INVALIDARG;
-    }
-    
+    if (pDevice == NULL || pOffset == NULL) return E_INVALIDARG;
     *pOffset = 0;
     
     ZeroMemory(&alloc, sizeof(alloc));
@@ -3533,24 +3081,14 @@ HRESULT PvgpuHeapAlloc(
     alloc.alignment = Alignment > 0 ? Alignment : 16;
     
     hr = PvgpuEscape(pDevice, &alloc, sizeof(alloc));
-    if (FAILED(hr))
-    {
-        return hr;
-    }
+    if (FAILED(hr)) return hr;
     
-    if (alloc.header.status != PVGPU_ERROR_SUCCESS)
-    {
-        PVGPU_TRACE("PvgpuHeapAlloc: KMD returned error 0x%X", alloc.header.status);
-        return E_OUTOFMEMORY;
-    }
+    if (alloc.header.status != PVGPU_ERROR_SUCCESS) return E_OUTOFMEMORY;
     
     *pOffset = alloc.offset;
     return S_OK;
 }
 
-/*
- * PvgpuHeapFree - Free shared memory heap allocation via KMD
- */
 HRESULT PvgpuHeapFree(
     _In_ PVGPU_UMD_DEVICE* pDevice,
     _In_ UINT32 Offset,
@@ -3559,10 +3097,7 @@ HRESULT PvgpuHeapFree(
     PvgpuEscapeFreeHeap freeData;
     HRESULT hr;
     
-    if (pDevice == NULL)
-    {
-        return E_INVALIDARG;
-    }
+    if (pDevice == NULL) return E_INVALIDARG;
     
     ZeroMemory(&freeData, sizeof(freeData));
     freeData.header.escape_code = PVGPU_ESCAPE_FREE_HEAP;
@@ -3570,46 +3105,26 @@ HRESULT PvgpuHeapFree(
     freeData.size = Size;
     
     hr = PvgpuEscape(pDevice, &freeData, sizeof(freeData));
-    if (FAILED(hr))
-    {
-        return hr;
-    }
-    
-    if (freeData.header.status != PVGPU_ERROR_SUCCESS)
-    {
-        PVGPU_TRACE("PvgpuHeapFree: KMD returned error 0x%X", freeData.header.status);
-        return E_FAIL;
-    }
+    if (FAILED(hr)) return hr;
     
     return S_OK;
 }
 
-/*
- * PvgpuRingDoorbell - Ring the doorbell to notify host of new commands
- */
 HRESULT PvgpuRingDoorbell(
     _In_ PVGPU_UMD_DEVICE* pDevice)
 {
     PvgpuEscapeHeader doorbell;
     HRESULT hr;
     
-    if (pDevice == NULL)
-    {
-        return E_INVALIDARG;
-    }
+    if (pDevice == NULL) return E_INVALIDARG;
     
     ZeroMemory(&doorbell, sizeof(doorbell));
     doorbell.escape_code = PVGPU_ESCAPE_RING_DOORBELL;
     
     hr = PvgpuEscape(pDevice, &doorbell, sizeof(doorbell));
-    /* Ignore errors - doorbell is best-effort notification */
-    
     return hr;
 }
 
-/*
- * PvgpuWaitFence - Wait for a fence value to complete
- */
 HRESULT PvgpuWaitFence(
     _In_ PVGPU_UMD_DEVICE* pDevice,
     _In_ UINT64 FenceValue,
@@ -3618,29 +3133,22 @@ HRESULT PvgpuWaitFence(
     PvgpuEscapeWaitFence wait;
     HRESULT hr;
     
-    if (pDevice == NULL)
-    {
-        return E_INVALIDARG;
-    }
+    if (pDevice == NULL) return E_INVALIDARG;
     
-    /* Check for backend disconnection before waiting */
     if (pDevice->SharedMemoryValid)
     {
         UINT32 status = pDevice->pControlRegion->status;
         if (status & PVGPU_STATUS_SHUTDOWN)
         {
-            OutputDebugStringA("PVGPU: Backend has shut down\n");
             pDevice->BackendConnected = FALSE;
             return DXGI_ERROR_DEVICE_REMOVED;
         }
         if (status & PVGPU_STATUS_DEVICE_LOST)
         {
-            OutputDebugStringA("PVGPU: Device lost\n");
             return DXGI_ERROR_DEVICE_REMOVED;
         }
     }
     
-    /* Fast path: check if already completed */
     if (pDevice->SharedMemoryValid && 
         pDevice->pControlRegion->host_fence_completed >= FenceValue)
     {
@@ -3653,30 +3161,19 @@ HRESULT PvgpuWaitFence(
     wait.timeout_ms = TimeoutMs;
     
     hr = PvgpuEscape(pDevice, &wait, sizeof(wait));
-    if (FAILED(hr))
-    {
-        return hr;
-    }
+    if (FAILED(hr)) return hr;
     
     if (wait.header.status == PVGPU_ERROR_TIMEOUT)
-    {
         return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
-    }
     else if (wait.header.status == PVGPU_ERROR_BACKEND_DISCONNECTED)
     {
-        OutputDebugStringA("PVGPU: Backend disconnected during wait\n");
         pDevice->BackendConnected = FALSE;
         return DXGI_ERROR_DEVICE_REMOVED;
     }
     else if (wait.header.status == PVGPU_ERROR_DEVICE_LOST)
-    {
-        OutputDebugStringA("PVGPU: Device lost during wait\n");
         return DXGI_ERROR_DEVICE_REMOVED;
-    }
     else if (wait.header.status != PVGPU_ERROR_SUCCESS)
-    {
         return E_FAIL;
-    }
     
     return S_OK;
 }
