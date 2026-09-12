@@ -16,19 +16,17 @@ jobs:
     - name: Install WDK
       shell: pwsh
       run: |
-        Write-Host "Downloading WDK ISO..."
-        Invoke-WebRequest -Uri "https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/22621.1.220506-1250.22h1_release_svc_prod1_WDK.iso" -OutFile "wdk.iso"
-        $mountResult = Mount-DiskImage -ImagePath "wdk.iso" -PassThru
-        $driveLetter = ($mountResult | Get-Volume).DriveLetter
-        Write-Host "Installing WDK MSI..."
-        $msiPath = "$($driveLetter):\Windows Driver Kit\Installers\Windows Kit.Windows Driver Kit-x86_en-us.msi"
-        Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /quiet /norestart" -Wait
+        Write-Host "Downloading WDK installer..."
+        curl.exe -L -o wdksetup.exe "https://go.microsoft.com/fwlink/?linkid=2196231"
+        Write-Host "Installing WDK silently..."
+        $p = Start-Process -FilePath ".\wdksetup.exe" -ArgumentList "/quiet", "/norestart" -Wait -PassThru
+        Write-Host "WDK installer exit code: $($p.ExitCode)"
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
 
     - name: Build Solution
-      run: msbuild driver/pvgpu.sln /p:Configuration=Release /p:Platform=x64
+      run: msbuild driver/pvgpu.sln /p:Configuration=Release /p:Platform=x64 /p:SpectreMitigation=false
 
     - name: Upload Built Drivers
       uses: actions/upload-artifact@v4
