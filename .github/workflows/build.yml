@@ -14,26 +14,30 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Install WDK via NuGet
+      id: wdk
       shell: pwsh
       run: |
         nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk
-        # The runner has the 10.0.26100.0 SDK installed, but is missing dxgkrnl.lib.
-        # We auto-find dxgkrnl.lib in the NuGet package and copy it to the correct folder.
-        $libPath = "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\km\x64"
-        $dxgkrnllib = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\build\Lib\*\km\x64\dxgkrnl.lib" -Recurse | Select-Object -First 1
-        if ($dxgkrnllib) {
-            Copy-Item $dxgkrnllib.FullName -Destination $libPath -Force
-            Write-Host "Copied dxgkrnl.lib to $libPath"
-        } else {
-            Write-Error "dxgkrnl.lib not found in NuGet package!"
-            exit 1
+        
+        # Merge the NuGet package into the standard Windows Kits folder
+        $winKits = "C:\Program Files (x86)\Windows Kits\10"
+        $packages = Get-ChildItem "C:\wdk\Microsoft.Windows.*"
+        foreach ($pkg in $packages) {
+            Write-Host "Merging $($pkg.Name) into Windows Kits..."
+            Copy-Item -Path "$($pkg.FullName)\*" -Destination $winKits -Recurse -Force
         }
+        
+        # Auto-detect the SDK version that was just installed by NuGet
+        $libDir = Get-ChildItem "$winKits\Lib\10.*" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+        $version = $libDir.Name
+        Write-Host "Detected WDK Version: $version"
+        echo "version=$version" >> $env:GITHUB_OUTPUT
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
 
     - name: Build Solution
-      run: msbuild driver/pvgpu.sln /p:Configuration=Release /p:Platform=x64 /p:SpectreMitigation=false
+      run: msbuild driver/pvgpu.sln /p:Configuration=Release /p:Platform=x64 /p:SpectreMitigation=false /p:WindowsTargetPlatformVersion=${{ steps.wdk.outputs.version }}
 
     - name: Upload Built Drivers
       uses: actions/upload-artifact@v4
