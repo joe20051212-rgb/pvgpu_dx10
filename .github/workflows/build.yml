@@ -1,8 +1,10 @@
-name: Build PVGPU Drivers
+name: Build PVGPU Driver
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -10,50 +12,42 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - name: Checkout Code
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install WDK via NuGet
-      id: wdk
-      shell: pwsh
-      run: |
-        nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk
-
-        $winKits = "C:\Program Files (x86)\Windows Kits\10"
-        $wdkPkg = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*" | Select-Object -First 1
-        
-        if (Test-Path "$($wdkPkg.FullName)\build\native") {
-            Copy-Item -Path "$($wdkPkg.FullName)\build\native\*" -Destination $winKits -Recurse -Force
-        } else {
-            Copy-Item -Path "$($wdkPkg.FullName)\*" -Destination $winKits -Recurse -Force
-        }
-
-        $libDir = Get-ChildItem "$winKits\Lib\10.*" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-        $version = $libDir.Name
-        Write-Host "Detected WDK Version: $version"
-        "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-    - name: Add MSBuild to PATH
+    - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Build Solution
-      shell: pwsh
-      env:
-        LIB: C:\Program Files (x86)\Windows Kits\10\lib\10.0.26100.0\km\x64;%LIB%
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
+
+    - name: Install and Integrate WDK Package
+      shell: powershell
       run: |
-        $version = "${{ steps.wdk.outputs.version }}"
+        nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk -Version 10.0.26100.2454
+        
+        $wdkPkg = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*" | Select-Object -First 1
+        $winKits = "C:\Program Files (x86)\Windows Kits\10"
+
+        # Copy missing libraries and binary tooling into standard Windows Kits directory
+        if (Test-Path "$($wdkPkg.FullName)\build\native") {
+            Copy-Item -Path "$($wdkPkg.FullName)\build\native\*" -Destination $winKits -Recurse -Force
+        }
+
+        # Locate extracted x64 km library path for explicit linking parameter
+        $wdkLib = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\build\native\Lib\*\km\x64" | Select-Object -First 1
+        "WDK_LIB_PATH=$($wdkLib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+    - name: Build Driver Solution
+      shell: powershell
+      run: |
         msbuild driver/pvgpu.sln `
           /p:Configuration=Release `
           /p:Platform=x64 `
           /p:SpectreMitigation=false `
-          /p:WindowsTargetPlatformVersion=$version `
+          /p:WindowsTargetPlatformVersion=10.0.26100.0 `
           /p:EnableInf2Cat=false `
           /p:Inf2CatUseLocalTime=true `
-          /p:DriverPackaging="false" `
-          /p:InfVerif="false"
-
-    - name: Upload Built Drivers
-      uses: actions/upload-artifact@v4
-      with:
-        name: pvgpu_drivers
-        path: driver/bin/Release/x64/
+          /p:DriverPackaging=false `
+          /p:InfVerif=false `
+          /p:LinkAdditionalLibraryDirectories="$env:WDK_LIB_PATH"
