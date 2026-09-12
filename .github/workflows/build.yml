@@ -14,13 +14,10 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Install Windows Driver Kit (WDK)
-      shell: pwsh
+      shell: cmd
       run: |
-        Write-Host "Downloading WDK installer..."
-        Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2196231" -OutFile "wdksetup.exe"
-        Write-Host "Installing WDK silently..."
-        $p = Start-Process -FilePath "wdksetup.exe" -ArgumentList "/quiet", "/norestart" -Wait -PassThru
-        Write-Host "WDK Installation Exit Code: $($p.ExitCode)"
+        curl -L -o "%TEMP%\wdksetup.exe" "https://go.microsoft.com/fwlink/?linkid=2196231"
+        "%TEMP%\wdksetup.exe" /quiet /norestart
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
