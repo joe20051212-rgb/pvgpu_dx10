@@ -20,7 +20,8 @@ jobs:
       run: |
         choco install windows-sdk-10.1 -y
         choco install wixtoolset -y
-
+        choco install wdk -y
+        choco install wdk-testing -y
     - name: Build Solution
       run: msbuild driver/pvgpu.sln /p:Configuration=Release /p:Platform=x64
 
