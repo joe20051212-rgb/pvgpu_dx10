@@ -17,11 +17,16 @@ jobs:
       shell: pwsh
       run: |
         nuget install Microsoft.Windows.WDK.x64 -OutputDirectory C:\wdk
-        $winKits = "C:\Program Files (x86)\Windows Kits\10"
-        $packages = Get-ChildItem "C:\wdk\Microsoft.Windows.*"
-        foreach ($pkg in $packages) {
-            Write-Host "Merging $($pkg.Name) into Windows Kits..."
-            Copy-Item -Path "$($pkg.FullName)\*" -Destination $winKits -Recurse -Force
+        # The runner has the 10.0.26100.0 SDK installed, but is missing dxgkrnl.lib.
+        # We auto-find dxgkrnl.lib in the NuGet package and copy it to the correct folder.
+        $libPath = "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\km\x64"
+        $dxgkrnllib = Get-ChildItem "C:\wdk\Microsoft.Windows.WDK.x64.*\build\Lib\*\km\x64\dxgkrnl.lib" -Recurse | Select-Object -First 1
+        if ($dxgkrnllib) {
+            Copy-Item $dxgkrnllib.FullName -Destination $libPath -Force
+            Write-Host "Copied dxgkrnl.lib to $libPath"
+        } else {
+            Write-Error "dxgkrnl.lib not found in NuGet package!"
+            exit 1
         }
 
     - name: Add MSBuild to PATH
