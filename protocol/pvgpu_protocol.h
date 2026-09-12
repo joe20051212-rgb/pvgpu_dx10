@@ -1,12 +1,5 @@
 /*
- * PVGPU Protocol Definitions
- * 
- * Shared header file for communication between:
- * - QEMU pvgpu device (C)
- * - Windows WDDM KMD/UMD drivers (C/C++)
- * - Host backend service (Rust via bindgen)
- * 
- * This file defines the binary protocol for guest↔host GPU virtualization.
+shit 
  */
 
 #ifndef PVGPU_PROTOCOL_H
@@ -78,20 +71,20 @@ extern "C" {
  * =============================================================================
  */
 
+#define PVGPU_FEATURE_D3D10         (1ULL << 9)     /* D3D10/10.1 support */
 #define PVGPU_FEATURE_D3D11         (1ULL << 0)     /* D3D11 support */
 #define PVGPU_FEATURE_D3D12         (1ULL << 1)     /* D3D12 support (future) */
-#define PVGPU_FEATURE_COMPUTE       (1ULL << 2)     /* Compute shaders */
-#define PVGPU_FEATURE_GEOMETRY      (1ULL << 3)     /* Geometry shaders */
-#define PVGPU_FEATURE_TESSELLATION  (1ULL << 4)     /* Hull/Domain shaders */
+#define PVGPU_FEATURE_COMPUTE       (1ULL << 2)     /* Compute shaders (DX11+) */
+#define PVGPU_FEATURE_GEOMETRY      (1ULL << 3)     /* Geometry shaders (DX10+) */
+#define PVGPU_FEATURE_TESSELLATION  (1ULL << 4)     /* Hull/Domain shaders (DX11+) */
 #define PVGPU_FEATURE_MSAA          (1ULL << 5)     /* Multi-sample anti-aliasing */
 #define PVGPU_FEATURE_HDR           (1ULL << 6)     /* HDR output (future) */
 #define PVGPU_FEATURE_VSYNC         (1ULL << 7)     /* VSync support */
 #define PVGPU_FEATURE_TRIPLE_BUFFER (1ULL << 8)     /* Triple buffering */
 
-/* MVP features */
-#define PVGPU_FEATURES_MVP          (PVGPU_FEATURE_D3D11 | PVGPU_FEATURE_COMPUTE | \
-                                     PVGPU_FEATURE_GEOMETRY | PVGPU_FEATURE_TESSELLATION | \
-                                     PVGPU_FEATURE_VSYNC)
+/* MVP features (DX10 baseline - no Compute or Tessellation) */
+#define PVGPU_FEATURES_MVP          (PVGPU_FEATURE_D3D10 | PVGPU_FEATURE_GEOMETRY | \
+                                     PVGPU_FEATURE_MSAA | PVGPU_FEATURE_VSYNC)
 
 /*
  * =============================================================================
