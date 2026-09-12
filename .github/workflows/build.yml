@@ -13,28 +13,11 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install Windows Driver Kit (WDK)
-      shell: powershell
+    - name: Install WDK via NuGet
+      shell: cmd
       run: |
-        Write-Host "Downloading WDK installer..."
-        Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2196231" -OutFile "wdksetup.exe"
-        
-        # Unblock the file so Windows allows it to execute
-        Unblock-File -Path "wdksetup.exe"
-        
-        Write-Host "Installing WDK silently..."
-        $proc = Start-Process -FilePath ".\wdksetup.exe" -ArgumentList "/quiet", "/norestart" -Wait -PassThru
-        Write-Host "WDK installer exit code: $($proc.ExitCode)"
-        
-        # Fallback: Manually extract the MSBuild targets just in case VS integration was skipped
-        $vsixPath = "C:\Program Files (x86)\Windows Kits\10\Vsix\VS2022\WDK.vsix"
-        if (Test-Path $vsixPath) {
-            Write-Host "Extracting WDK MSBuild targets..."
-            & "C:\Program Files\7-Zip\7z.exe" x $vsixPath -o"C:\Temp\WDK" -y
-            xcopy 'C:\Temp\WDK\$MSBuild\*' "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v170\" /E /I /Y
-        } else {
-            Write-Host "WARNING: WDK VSIX not found!"
-        }
+        nuget install Microsoft.Windows.WDK.x64 -Version 10.0.22621.3233 -OutputDirectory C:\wdk
+        xcopy "C:\wdk\Microsoft.Windows.WDK.x64.10.0.22621.3233\build\*" "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v170\" /E /I /Y
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
