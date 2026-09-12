@@ -13,11 +13,9 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install WDK via NuGet
+    - name: Install WDK
       shell: cmd
-      run: |
-        nuget install Microsoft.Windows.WDK.x64 -Version 10.0.22621.3233 -OutputDirectory C:\wdk
-        xcopy "C:\wdk\Microsoft.Windows.WDK.x64.10.0.22621.3233\build\*" "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v170\" /E /I /Y
+      run: choco install wdk10 -y
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1
