@@ -29,11 +29,12 @@ pub const PVGPU_FEATURE_MSAA: u64 = 1 << 5;
 pub const PVGPU_FEATURE_HDR: u64 = 1 << 6;
 pub const PVGPU_FEATURE_VSYNC: u64 = 1 << 7;
 pub const PVGPU_FEATURE_TRIPLE_BUFFER: u64 = 1 << 8;
+pub const PVGPU_FEATURE_D3D10: u64 = 1 << 9; // Added for DX10 support
 
-pub const PVGPU_FEATURES_MVP: u64 = PVGPU_FEATURE_D3D11
-    | PVGPU_FEATURE_COMPUTE
+/// MVP features (DX10.1 baseline - no Compute or Tessellation)
+pub const PVGPU_FEATURES_MVP: u64 = PVGPU_FEATURE_D3D10
     | PVGPU_FEATURE_GEOMETRY
-    | PVGPU_FEATURE_TESSELLATION
+    | PVGPU_FEATURE_MSAA
     | PVGPU_FEATURE_VSYNC;
 
 // =============================================================================
